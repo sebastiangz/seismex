@@ -1,0 +1,161 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seismex"
+version = "0.1.0"
+description = "Sistema de Análisis Sísmico para México - Energy Space Density y herramientas de riesgo sísmico"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "SEISMEX Team", email = "seismex@example.com"}
+]
+maintainers = [
+    {name = "SEISMEX Team", email = "seismex@example.com"}
+]
+keywords = [
+    "seismology",
+    "earthquake",
+    "seismic hazard",
+    "energy space density",
+    "ESD",
+    "Mexico",
+    "geophysics",
+    "PSHA",
+    "isoseismal"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+dependencies = [
+    "numpy>=1.21.0",
+    "scipy>=1.7.0",
+    "pandas>=1.3.0",
+    "geopandas>=0.10.0",
+    "matplotlib>=3.4.0",
+    "cartopy>=0.20.0",
+    "pyproj>=3.2.0",
+    "shapely>=1.8.0",
+    "requests>=2.26.0",
+    "tqdm>=4.62.0",
+    "pyyaml>=5.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.2.0",
+    "pytest-cov>=2.12.0",
+    "black>=22.0.0",
+    "isort>=5.10.0",
+    "flake8>=4.0.0",
+    "mypy>=0.950",
+]
+docs = [
+    "sphinx>=4.2.0",
+    "sphinx-rtd-theme>=1.0.0",
+    "myst-parser>=0.18.0",
+]
+optimization = [
+    "deap>=1.3.0",
+    "scikit-learn>=1.0.0",
+]
+gee = [
+    "earthengine-api>=0.1.290",
+]
+all = [
+    "seismex[dev,docs,optimization,gee]",
+]
+
+[project.urls]
+Homepage = "https://github.com/seismex/seismex"
+Documentation = "https://seismex.readthedocs.io"
+Repository = "https://github.com/seismex/seismex.git"
+Issues = "https://github.com/seismex/seismex/issues"
+Changelog = "https://github.com/seismex/seismex/blob/main/CHANGELOG.md"
+
+[project.scripts]
+seismex = "seismex.cli:main"
+
+[tool.setuptools]
+packages = ["seismex"]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["seismex*"]
+
+[tool.setuptools.package-data]
+seismex = [
+    "resources/colormaps/*.json",
+    "resources/config/*.yaml",
+]
+
+# Configuración de herramientas de desarrollo
+
+[tool.black]
+line-length = 88
+target-version = ['py39', 'py310', 'py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 88
+known_first_party = ["seismex"]
+skip_gitignore = true
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --cov=seismex --cov-report=term-missing"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.coverage.run]
+source = ["seismex"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

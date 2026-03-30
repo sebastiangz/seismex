@@ -1,0 +1,56 @@
+# SEISMEX - Ambiente Conda
+# ========================
+# Crear ambiente: conda env create -f environment.yml
+# Activar: conda activate seismex
+# Actualizar: conda env update -f environment.yml
+
+name: seismex
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Python
+  - python>=3.9,<3.12
+  
+  # Core científico
+  - numpy>=1.21
+  - scipy>=1.7
+  - pandas>=1.3
+  
+  # Geoespacial (mejor desde conda-forge)
+  - geopandas>=0.10
+  - pyproj>=3.2
+  - shapely>=1.8
+  - rasterio>=1.2
+  - fiona>=1.8
+  - gdal>=3.3
+  
+  # Visualización
+  - matplotlib>=3.4
+  - cartopy>=0.20
+  
+  # Machine Learning
+  - scikit-learn>=1.0
+  
+  # Utilidades
+  - requests>=2.26
+  - tqdm>=4.62
+  - pyyaml>=5.4
+  
+  # Formatos
+  - openpyxl>=3.0
+  - h5py>=3.4
+  
+  # Jupyter (opcional, descomentar si se necesita)
+  # - jupyter
+  # - jupyterlab
+  
+  # Pip dependencies
+  - pip
+  - pip:
+    - deap>=1.3.0          # Algoritmos genéticos (no en conda)
+    - folium>=0.12.0       # Mapas interactivos
+    - pytest>=6.2.0
+    - pytest-cov>=2.12.0
+    # - earthengine-api    # Descomentar para GEE
