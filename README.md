@@ -311,7 +311,8 @@ Este proyecto está bajo la Licencia MIT - ver [LICENSE](LICENSE) para detalles.
 
 ## 👥 Autores
 
-- **Tu Nombre** - *Desarrollo inicial* - [GitHub](https://github.com/tu-usuario)
+- **sgz** - *Desarrollo inicial* - [GitHub](https://github.com/sebastiangz)
+- **mbg** - *Desarrollo funcional* 
 
 ## 🙏 Agradecimientos
 
