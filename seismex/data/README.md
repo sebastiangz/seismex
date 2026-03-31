@@ -7,30 +7,117 @@ Módulo de conectores de datos de SEISMEX. Proporciona interfaces para acceder a
 ## 📋 Contenido
 
 - [Fuentes Disponibles](#fuentes-disponibles)
+- [Instalación](#instalación)
+- [Configuración](#configuración)
 - [Conector SSN](#conector-ssn)
-- [Conector ISC-GEM](#conector-isc-gem)
 - [Conector USGS](#conector-usgs)
-- [Conector GCMT](#conector-gcmt)
+- [Conector ISC](#conector-isc)
+- [Conector IRIS/FDSN](#conector-irisfdsn)
+- [Validación de Calidad](#validación-de-calidad)
 - [Gestión de Caché](#gestión-de-caché)
-- [Actualización Automática](#actualización-automática)
+- [Regiones Predefinidas](#regiones-predefinidas)
 
 ---
 
-## Estado: 📋 Planificado
+## Estado: ✅ Implementado
 
-Este módulo está en fase de diseño. Los conectores permitirán descargar y actualizar catálogos sísmicos automáticamente.
+Este módulo está completamente implementado con conectores para SSN, USGS, ISC e IRIS/FDSN.
 
 ---
 
 ## Fuentes Disponibles
 
-| Fuente | Código | Cobertura | Magnitud Mín | Estado |
-|--------|--------|-----------|--------------|--------|
-| **SSN** | `ssn` | México | ~2.0 | 📋 Planificado |
-| **ISC-GEM** | `isc` | Global | ~5.0 (histórico) | 📋 Planificado |
-| **USGS** | `usgs` | Global | ~2.5 | 📋 Planificado |
-| **GCMT** | `gcmt` | Global (CMT) | ~5.0 | 📋 Planificado |
-| **IRIS** | `iris` | Global | Variable | 📋 Planificado |
+| Fuente | Código | Cobertura | Autenticación | Estado |
+|--------|--------|-----------|---------------|--------|
+| **SSN** | `ssn` | México | No requerida | ✅ Implementado |
+| **USGS** | `usgs` | Global | Email opcional | ✅ Implementado |
+| **ISC** | `isc` | Global (histórico) | No requerida | ✅ Implementado |
+| **IRIS** | `iris` | Global (FDSN) | No requerida | ✅ Implementado |
+
+### Prioridad de Fuentes
+
+Para datos de México, la prioridad recomendada es:
+
+1. **SSN** - Fuente principal y más completa para México
+2. **USGS** - Excelente cobertura, API robusta
+3. **ISC** - Ideal para datos históricos (ISC-GEM)
+4. **IRIS** - Para mecanismos focales y datos FDSN
+
+---
+
+## Instalación
+
+```bash
+pip install seismex
+```
+
+### Dependencias opcionales
+
+```bash
+# Para el conector IRIS/FDSN (mecanismos focales)
+pip install obspy
+```
+
+---
+
+## Configuración
+
+La configuración se almacena en `~/.seismex/config.yaml`:
+
+```yaml
+general:
+  cache_enabled: true
+  cache_expiration_days: 30
+  timeout: 60
+  max_retries: 3
+
+ssn:
+  enabled: true
+  # Directorio para archivos descargados manualmente del SSN
+  local_data_dir: ~/seismex_data/ssn
+  request_delay: 2
+
+usgs:
+  enabled: true
+  # Email OPCIONAL pero recomendado para mejor rate limit
+  # Sin email: ~5 req/s | Con email: ~20 req/s
+  email: ""  # tu@email.com
+
+isc:
+  enabled: true
+  catalog: isc-gem
+
+iris:
+  enabled: true
+  fdsn_client: IRIS
+  include_focal_mechanisms: true
+
+quality:
+  auto_validate: true
+  min_score: 70
+```
+
+### Variables de Entorno
+
+Las variables con prefijo `SEISMEX_` tienen prioridad sobre el archivo YAML:
+
+```bash
+export SEISMEX_USGS_EMAIL="mi@email.com"
+export SEISMEX_SSN_LOCAL_DATA_DIR="~/mis_datos/ssn"
+```
+
+### Configuración Programática
+
+```python
+from seismex.data import configure, get_config
+
+# Configurar
+configure(usgs_email='mi@email.com')
+configure(ssn_local_data_dir='~/seismex_data/ssn')
+
+# Ver configuración actual
+print(get_config().show())
+```
 
 ---
 
@@ -38,117 +125,71 @@ Este módulo está en fase de diseño. Los conectores permitirán descargar y ac
 
 ### Servicio Sismológico Nacional de México
 
+El SSN es la **fuente prioritaria** para SEISMEX. Como el SSN no tiene API pública oficial, este conector implementa:
+
+1. **Web scraping** del portal SSN (intenta primero)
+2. **Fallback a archivos locales** en `~/seismex_data/ssn`
+
 ```python
-from seismex.data import ConectorSSN
+from seismex.data import ConectorSSN, descargar_ssn, cargar_ssn_local
 
 # Inicializar conector
-ssn = ConectorSSN(
-    cache_dir='~/.seismex/cache/ssn',
-    timeout=30
-)
+ssn = ConectorSSN()
 
-# Descargar catálogo por región
-catalogo = ssn.descargar(
-    fecha_inicio='2020-01-01',
+# Opción 1: Descargar (web scraping con fallback automático a local)
+resultado = ssn.descargar(
+    fecha_inicio='2024-01-01',
     fecha_fin='2024-12-31',
-    lat_min=18.0,
-    lat_max=21.0,
-    lon_min=-106.0,
-    lon_max=-102.0,
-    magnitud_min=3.0
+    region='colima',
+    magnitud_min=3.5
 )
 
-print(f"Eventos descargados: {len(catalogo)}")
-print(catalogo.resumen())
+# Opción 2: Cargar archivo local directamente
+resultado = ssn.cargar_archivo('~/seismex_data/ssn/catalogo_2024.csv')
+
+# Opción 3: Función de conveniencia
+resultado = descargar_ssn(region='jalisco', magnitud_min=4.0)
+
+# Acceder a los datos
+if resultado.success:
+    df = resultado.data
+    print(f"Eventos descargados: {resultado.events_count}")
+    print(f"Tiempo de descarga: {resultado.download_time:.2f}s")
+    print(f"Desde caché: {resultado.from_cache}")
+```
+
+### Uso de Archivos Locales
+
+Cuando el web scraping no está disponible:
+
+```python
+# Ver información del directorio local
+print(ssn.info_directorio_local())
+
+# Listar archivos disponibles
+archivos = ssn.listar_archivos_locales()
+for archivo in archivos:
+    print(f"  • {archivo.name}")
+
+# Cargar archivo específico con filtros
+resultado = ssn.cargar_archivo(
+    'catalogo_ssn_2024.csv',
+    fecha_inicio='2024-06-01',
+    magnitud_min=4.0
+)
 ```
 
 ### Regiones Predefinidas
 
 ```python
-# Usar región predefinida
-catalogo_colima = ssn.descargar_region(
-    region='colima',
-    fecha_inicio='2020-01-01',
-    fecha_fin='2024-12-31'
-)
+# Descargar por región
+resultado = ssn.descargar_region('colima', fecha_inicio='2024-01-01')
 
-# Regiones disponibles
-print(ssn.regiones_disponibles())
-# ['colima', 'jalisco', 'michoacan', 'guerrero', 'oaxaca', 
-#  'chiapas', 'cdmx', 'golfo', 'peninsula_yucatan', 'nacional']
-```
+# Sismos significativos (M >= 5.0)
+resultado = ssn.obtener_sismos_significativos(magnitud_min=5.0)
 
-### Descargar Catálogo Completo
-
-```python
-# Catálogo histórico completo de México
-catalogo_historico = ssn.descargar_historico(
-    desde_ano=1900,
-    hasta_ano=2024,
-    solo_instrumentales=False,  # Incluir históricos
-    magnitud_min=5.0
-)
-```
-
-### Actualización Incremental
-
-```python
-# Verificar última actualización
-ultima = ssn.ultima_actualizacion()
-print(f"Última actualización: {ultima}")
-
-# Descargar solo eventos nuevos
-nuevos = ssn.actualizar(catalogo_existente)
-print(f"Nuevos eventos: {len(nuevos)}")
-
-# Combinar
-catalogo_actualizado = catalogo_existente.combinar(nuevos)
-```
-
----
-
-## Conector ISC-GEM
-
-### International Seismological Centre - Global Earthquake Model
-
-```python
-from seismex.data import ConectorISC
-
-isc = ConectorISC()
-
-# Descargar catálogo ISC-GEM (histórico de alta calidad)
-catalogo_isc = isc.descargar_gem(
-    fecha_inicio='1900-01-01',
-    fecha_fin='2020-12-31',
-    lat_min=14.0,
-    lat_max=33.0,
-    lon_min=-118.0,
-    lon_max=-86.0,
-    magnitud_min=5.5
-)
-
-# Descargar del ISC Bulletin (más completo, menos revisado)
-catalogo_bulletin = isc.descargar_bulletin(
-    fecha_inicio='2020-01-01',
-    fecha_fin='2024-12-31',
-    tipo='reviewed'  # 'reviewed', 'all'
-)
-```
-
-### Acceso a Mecanismos Focales
-
-```python
-# Descargar con mecanismos focales
-catalogo_cmt = isc.descargar_con_mecanismos(
-    fecha_inicio='2000-01-01',
-    magnitud_min=5.0
-)
-
-# Acceder a tensores
-for evento in catalogo_cmt:
-    if evento.tiene_mecanismo:
-        print(f"{evento.fecha}: Strike={evento.strike}°, "
-              f"Dip={evento.dip}°, Rake={evento.rake}°")
+# Último año
+resultado = ssn.obtener_ultimo_anio(region='nacional')
 ```
 
 ---
@@ -157,90 +198,195 @@ for evento in catalogo_cmt:
 
 ### United States Geological Survey
 
-```python
-from seismex.data import ConectorUSGS
+La API USGS es **pública y gratuita**. El email es **opcional pero recomendado**:
 
+- **Sin email**: ~5 requests/segundo
+- **Con email**: ~20 requests/segundo
+
+```python
+from seismex.data import ConectorUSGS, descargar_usgs, configure
+
+# Configurar email para mejor rate limit (opcional)
+configure(usgs_email='mi@email.com')
+
+# Inicializar conector
 usgs = ConectorUSGS()
 
-# API de ComCat
-catalogo_usgs = usgs.descargar(
-    fecha_inicio='2020-01-01',
+# Descargar catálogo
+resultado = usgs.descargar(
+    fecha_inicio='2024-01-01',
     fecha_fin='2024-12-31',
-    lat_min=14.0,
-    lat_max=33.0,
-    lon_min=-118.0,
-    lon_max=-86.0,
+    region='nacional',  # Región de México
     magnitud_min=4.0
 )
 
-# Búsqueda por círculo
-catalogo_cerca = usgs.descargar_circulo(
-    lat_centro=19.32,
-    lon_centro=-103.64,
-    radio_km=200,
-    fecha_inicio='2020-01-01',
-    magnitud_min=3.0
+# Función de conveniencia
+resultado = descargar_usgs(region='colima', magnitud_min=3.5)
+
+# Descargar específicamente para México
+resultado = usgs.descargar_mexico(
+    fecha_inicio='2024-01-01',
+    magnitud_min=4.0
 )
+
+# Sismos recientes
+resultado = usgs.descargar_recientes(dias=30, magnitud_min=4.0)
 ```
 
-### ShakeMaps y Productos Derivados
+### Obtener Evento Específico
 
 ```python
-# Descargar ShakeMap para un evento específico
-shakemap = usgs.descargar_shakemap(
-    event_id='us7000abcd',
-    producto='pga'  # 'pga', 'pgv', 'mmi', 'psa03', 'psa10', 'psa30'
-)
+# Información detallada de un evento
+evento = usgs.obtener_evento('us7000abcd')
+if evento is not None:
+    print(f"Fecha: {evento['fecha']}")
+    print(f"Magnitud: {evento['magnitud']} {evento['tipo_magnitud']}")
+    print(f"Lugar: {evento['lugar']}")
+```
 
-# Guardar como GeoTIFF
-shakemap.guardar('shakemap_pga.tif')
+### Verificar Conexión y Rate Limits
 
-# Descargar DYFI (Did You Feel It)
-dyfi = usgs.descargar_dyfi(event_id='us7000abcd')
+```python
+# Verificar conectividad
+if usgs.verificar_conexion():
+    print("Conexión OK")
+
+# Ver información de rate limits
+print(usgs.info_rate_limit())
 ```
 
 ---
 
-## Conector GCMT
+## Conector ISC
 
-### Global Centroid Moment Tensor
+### International Seismological Centre
+
+El ISC proporciona catálogos de alta calidad, especialmente el **ISC-GEM** para sismos históricos significativos (M ≥ 5.5 desde 1904).
 
 ```python
-from seismex.data import ConectorGCMT
+from seismex.data import ConectorISC, descargar_isc, descargar_isc_gem_mexico
 
-gcmt = ConectorGCMT()
+# Catálogos disponibles
+isc = ConectorISC(catalogo='isc-gem')  # 'isc-gem', 'reviewed', 'comprehensive'
+print(isc.catalogos_disponibles())
 
-# Descargar catálogo CMT
-catalogo_cmt = gcmt.descargar(
-    fecha_inicio='1976-01-01',  # Inicio del proyecto GCMT
+# Descargar catálogo ISC-GEM histórico para México
+resultado = isc.descargar(
+    fecha_inicio='1900-01-01',
     fecha_fin='2024-12-31',
-    lat_min=14.0,
-    lat_max=33.0,
-    lon_min=-118.0,
-    lon_max=-86.0
+    region='nacional',
+    magnitud_min=6.0
 )
 
-# Filtrar por tipo de falla
-thrust = catalogo_cmt.filtrar_mecanismo(tipo='thrust')
-normal = catalogo_cmt.filtrar_mecanismo(tipo='normal')
-strike_slip = catalogo_cmt.filtrar_mecanismo(tipo='strike_slip')
+# Función de conveniencia para ISC-GEM México
+resultado = descargar_isc_gem_mexico(magnitud_min=6.5)
+
+# Método especializado para históricos
+resultado = isc.descargar_gem_historico(
+    region='nacional',
+    magnitud_min=7.0
+)
 ```
 
-### Análisis de Mecanismos
+---
+
+## Conector IRIS/FDSN
+
+### Federation of Digital Seismograph Networks (via ObsPy)
+
+Este conector usa ObsPy para acceder a múltiples servicios FDSN internacionales.
+
+**Requiere**: `pip install obspy`
 
 ```python
-# Estadísticas de mecanismos
-stats = catalogo_cmt.estadisticas_mecanismos()
-print(f"Thrust: {stats['thrust']}%")
-print(f"Normal: {stats['normal']}%")
-print(f"Strike-slip: {stats['strike_slip']}%")
+from seismex.data import ConectorIRIS, descargar_iris, obtener_mecanismos_focales
 
-# Diagramas de bola de playa
-from seismex.visualization import DiagramasMecanismos
+# Inicializar (cliente IRIS por defecto)
+iris = ConectorIRIS()
 
-diag = DiagramasMecanismos(catalogo_cmt)
-diag.graficar_mapa_mecanismos(guardar='mecanismos_mexico.png')
+# Ver clientes FDSN disponibles
+print(ConectorIRIS.clientes_disponibles())
+# IRIS, USGS, ISC, EMSC, GFZ, INGV, RESIF, ORFEUS, NCEDC, SCEDC, TEXNET...
+
+# Descargar catálogo
+resultado = iris.descargar(
+    fecha_inicio='2024-01-01',
+    region='nacional',
+    magnitud_min=4.5
+)
+
+# Cambiar cliente FDSN
+iris.cambiar_cliente('EMSC')  # European-Mediterranean Seismological Centre
 ```
+
+### Mecanismos Focales
+
+```python
+# Descargar con mecanismos focales (generalmente M >= 5.5)
+resultado = iris.descargar_con_mecanismos(
+    fecha_inicio='2020-01-01',
+    region='nacional',
+    magnitud_min=5.5
+)
+
+# Los datos incluyen: strike, dip, rake, momento_escalar
+df = resultado.data
+print(df[['fecha', 'magnitud', 'strike', 'dip', 'rake']])
+
+# Función de conveniencia
+resultado = obtener_mecanismos_focales(
+    region='nacional',
+    magnitud_min=5.5
+)
+```
+
+### Verificar Servicio
+
+```python
+# Verificar conexión
+if iris.verificar_conexion():
+    print("Servicio FDSN disponible")
+
+# Información del servicio actual
+print(iris.info_servicio())
+```
+
+---
+
+## Validación de Calidad
+
+El módulo incluye validación automática de catálogos con score de calidad 0-100.
+
+```python
+from seismex.data import validar_catalogo, validacion_rapida, QualityValidator
+
+# Validación completa
+reporte = validar_catalogo(resultado.data)
+
+print(f"Score de calidad: {reporte.score}/100")
+print(f"Eventos válidos: {reporte.valid_events}/{reporte.total_events}")
+print(reporte)
+
+# Validación rápida (solo score)
+score = validacion_rapida(resultado.data)
+print(f"Score: {score}")
+
+# Exportar reporte
+reporte.exportar_json('reporte_calidad.json')
+
+# Validador personalizado
+validator = QualityValidator(config=get_config().quality)
+reporte = validator.validar(df)
+```
+
+### Checks de Calidad
+
+- Columnas requeridas (fecha, latitud, longitud, magnitud)
+- Valores faltantes
+- Rangos válidos (coordenadas, profundidad, magnitud)
+- Detección de duplicados
+- Detección de outliers
+- Consistencia temporal
 
 ---
 
@@ -248,150 +394,96 @@ diag.graficar_mapa_mecanismos(guardar='mecanismos_mexico.png')
 
 ### Configuración de Caché
 
-```python
-from seismex.data import ConfiguracionCache
-
-# Configurar caché global
-cache = ConfiguracionCache(
-    directorio='~/.seismex/cache',
-    tamano_max_mb=1000,
-    expiracion_dias=30,
-    compresion=True
-)
-
-# Aplicar a conectores
-ssn = ConectorSSN(cache=cache)
-usgs = ConectorUSGS(cache=cache)
-```
-
-### Operaciones de Caché
+El caché se almacena en `~/.seismex/cache` con compresión gzip.
 
 ```python
-from seismex.data import GestorCache
+from seismex.data import get_cache, clear_cache, estado_cache
 
-gestor = GestorCache('~/.seismex/cache')
+# Ver estado del caché
+print(estado_cache())
 
-# Ver estado
-print(gestor.estado())
-# Tamaño: 245 MB
-# Archivos: 127
-# Última limpieza: 2024-01-15
+# Obtener gestor de caché
+cache = get_cache()
+stats = cache.stats()
+print(f"Entradas: {stats.total_entries}")
+print(f"Tamaño: {stats.total_size_mb:.2f} MB")
+print(f"Hits: {stats.total_hits}")
 
 # Limpiar caché expirado
-gestor.limpiar_expirados()
+cache.clean_expired()
+
+# Limpiar caché de una fuente específica
+cache.clean_source('ssn')
 
 # Limpiar todo
-gestor.limpiar_todo()
+clear_cache()
+```
 
-# Precargar catálogos
-gestor.precargar([
-    {'fuente': 'ssn', 'region': 'colima', 'desde': '2010'},
-    {'fuente': 'usgs', 'lat_min': 14, 'lat_max': 33, 'desde': '2010'}
-])
+### Uso de Caché en Conectores
+
+```python
+# Deshabilitar caché para una consulta
+ssn = ConectorSSN(usar_cache=False)
+
+# Verificar si datos vienen de caché
+resultado = ssn.descargar(region='colima')
+if resultado.from_cache:
+    print("Datos obtenidos desde caché")
 ```
 
 ---
 
-## Actualización Automática
-
-### Programar Actualizaciones
+## Regiones Predefinidas
 
 ```python
-from seismex.data import ActualizadorAutomatico
+from seismex.data import REGIONES_MEXICO
 
-# Crear actualizador
-actualizador = ActualizadorAutomatico(
-    catalogos=['ssn', 'usgs'],
-    directorio_salida='./datos/catalogos',
-    intervalo_horas=24
-)
-
-# Configurar notificaciones
-actualizador.configurar_notificaciones(
-    email='usuario@ejemplo.com',
-    en_nuevos_eventos=True,
-    magnitud_minima_notificar=5.0
-)
-
-# Ejecutar (normalmente como servicio)
-actualizador.iniciar()
+# Ver todas las regiones disponibles
+for nombre, limites in REGIONES_MEXICO.items():
+    print(f"{nombre}: lat [{limites['lat_min']}, {limites['lat_max']}], "
+          f"lon [{limites['lon_min']}, {limites['lon_max']}]")
 ```
 
-### Script de Actualización (Cron)
+### Regiones Disponibles
 
-```bash
-# Archivo: scripts/actualizar_catalogos.py
-#!/usr/bin/env python
-"""Script para actualización programada de catálogos."""
-
-from seismex.data import ConectorSSN, ConectorUSGS
-from seismex.core import CatalogoSismico
-import logging
-
-logging.basicConfig(level=logging.INFO)
-
-def main():
-    # Cargar catálogo existente
-    catalogo = CatalogoSismico.cargar('catalogos/mexico_completo.pkl')
-    
-    # Actualizar desde SSN
-    ssn = ConectorSSN()
-    nuevos_ssn = ssn.actualizar(catalogo)
-    logging.info(f"SSN: {len(nuevos_ssn)} nuevos eventos")
-    
-    # Actualizar desde USGS
-    usgs = ConectorUSGS()
-    nuevos_usgs = usgs.actualizar(catalogo)
-    logging.info(f"USGS: {len(nuevos_usgs)} nuevos eventos")
-    
-    # Combinar y guardar
-    catalogo.agregar(nuevos_ssn)
-    catalogo.agregar(nuevos_usgs)
-    catalogo.eliminar_duplicados()
-    catalogo.guardar('catalogos/mexico_completo.pkl')
-    
-    logging.info(f"Total eventos: {len(catalogo)}")
-
-if __name__ == '__main__':
-    main()
-```
+| Región | Descripción |
+|--------|-------------|
+| `nacional` | Todo México |
+| `colima` | Estado de Colima y alrededores |
+| `jalisco` | Estado de Jalisco |
+| `michoacan` | Estado de Michoacán |
+| `guerrero` | Estado de Guerrero |
+| `oaxaca` | Estado de Oaxaca |
+| `chiapas` | Estado de Chiapas |
+| `cdmx` | Ciudad de México y área metropolitana |
+| `veracruz` | Estado de Veracruz |
+| `baja_california` | Península de Baja California |
+| `golfo_california` | Golfo de California |
+| `peninsula_yucatan` | Península de Yucatán |
 
 ---
 
-## Formatos de Datos
+## Formato de Datos Estándar
 
-### Formatos de Entrada Soportados
+Todos los conectores normalizan los datos al mismo formato:
 
-| Formato | Extensión | Descripción |
-|---------|-----------|-------------|
-| CSV | .csv | Valores separados por comas |
-| Excel | .xlsx, .xls | Microsoft Excel |
-| QuakeML | .xml | Estándar internacional |
-| ISF | .isf | ISC Seismic Format |
-| ZMAP | .zmap | Formato ZMAP |
-| JSON | .json | JavaScript Object Notation |
-| Pickle | .pkl | Serialización Python |
-
-### Mapeo de Columnas
-
-```python
-# Definir mapeo personalizado
-mapeo = {
-    'fecha': 'FECHA_UTC',
-    'latitud': 'LAT',
-    'longitud': 'LON',
-    'profundidad': 'PROF_KM',
-    'magnitud': 'MAG',
-    'tipo_magnitud': 'TIPO_MAG',
-    'fuente': 'AGENCIA'
-}
-
-catalogo = CatalogoSismico.desde_csv(
-    'catalogo_custom.csv',
-    mapeo_columnas=mapeo,
-    formato_fecha='%Y-%m-%d %H:%M:%S'
-)
-```
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| `fecha` | datetime | Fecha y hora UTC del evento |
+| `latitud` | float | Latitud del epicentro |
+| `longitud` | float | Longitud del epicentro |
+| `profundidad_km` | float | Profundidad en kilómetros |
+| `magnitud` | float | Magnitud del evento |
+| `tipo_magnitud` | str | Tipo de magnitud (Mw, ML, mb, etc.) |
+| `fuente` | str | Fuente de los datos (SSN, USGS, etc.) |
+| `id_evento` | str | Identificador único |
+| `lugar` | str | Descripción del lugar |
+| `incertidumbre_h` | float | Incertidumbre horizontal (km) |
+| `incertidumbre_z` | float | Incertidumbre en profundidad (km) |
+| `incertidumbre_m` | float | Incertidumbre en magnitud |
+| `rms` | float | RMS del ajuste |
+| `gap` | float | Gap azimutal (grados) |
+| `nst` | int | Número de estaciones |
 
 ---
 
@@ -399,72 +491,110 @@ catalogo = CatalogoSismico.desde_csv(
 
 ```
 seismex/data/
-├── __init__.py               # Exportaciones
-├── base.py                   # Clase base ConectorBase
-├── ssn.py                    # Conector SSN México
-├── isc.py                    # Conector ISC-GEM
-├── usgs.py                   # Conector USGS ComCat
-├── gcmt.py                   # Conector GCMT
-├── iris.py                   # Conector IRIS (planificado)
-├── cache.py                  # Gestión de caché
-├── updater.py                # Actualización automática
-├── parsers/                  # Parsers de formatos
-│   ├── __init__.py
-│   ├── csv_parser.py
-│   ├── quakeml_parser.py
-│   ├── isf_parser.py
-│   └── zmap_parser.py
-└── README.md                 # Este archivo
+├── __init__.py          # Exportaciones y funciones de alto nivel
+├── config.py            # Sistema de configuración YAML
+├── cache.py             # Gestión de caché con compresión
+├── base.py              # Clase base ConectorBase y regiones
+├── quality.py           # Validación y reportes de calidad
+├── ssn.py               # Conector SSN (prioridad para México)
+├── usgs.py              # Conector USGS
+├── isc.py               # Conector ISC/ISC-GEM
+├── iris.py              # Conector IRIS/FDSN (via ObsPy)
+└── README.md            # Este archivo
 ```
 
 ---
 
 ## Dependencias
 
-```python
+```
 # Core
-requests>=2.25.0
 pandas>=1.3.0
+numpy>=1.20.0
+pyyaml>=5.4.0
+requests>=2.25.0
+beautifulsoup4>=4.9.0
 
-# Parsing
-obspy>=1.3.0            # QuakeML
-lxml>=4.6.0             # XML
-
-# Caché
-diskcache>=5.2.0
-
-# Compresión
-gzip
-lzma
+# Opcional (para IRIS/FDSN)
+obspy>=1.3.0
 ```
 
 ---
 
 ## API Reference
 
-### ConectorBase (Clase Abstracta)
+### Funciones de Alto Nivel
 
 ```python
-class ConectorBase(ABC):
-    """Clase base para conectores de datos sísmicos."""
+from seismex.data import (
+    # Función unificada
+    descargar,              # descargar(fuente, **kwargs)
+    descargar_mexico,       # descargar_mexico(fuente, magnitud_min)
     
-    @abstractmethod
-    def descargar(self, **kwargs) -> CatalogoSismico:
-        """Descargar datos de la fuente."""
-        pass
+    # SSN (prioridad)
+    descargar_ssn,          # descargar_ssn(**kwargs)
+    cargar_ssn_local,       # cargar_ssn_local(filepath, **filtros)
     
-    @abstractmethod
-    def actualizar(self, catalogo_existente) -> CatalogoSismico:
-        """Descargar solo eventos nuevos."""
-        pass
+    # USGS
+    descargar_usgs,         # descargar_usgs(**kwargs)
+    descargar_usgs_mexico,  # descargar_usgs_mexico(fecha_inicio, magnitud_min)
     
-    def ultima_actualizacion(self) -> datetime:
-        """Fecha de última actualización del caché."""
-        pass
+    # ISC
+    descargar_isc,          # descargar_isc(**kwargs)
+    descargar_isc_gem_mexico,  # descargar_isc_gem_mexico(magnitud_min)
     
-    def limpiar_cache(self):
-        """Eliminar datos en caché."""
-        pass
+    # IRIS/FDSN
+    descargar_iris,         # descargar_iris(**kwargs)
+    descargar_fdsn,         # descargar_fdsn(cliente, **kwargs)
+    obtener_mecanismos_focales,  # obtener_mecanismos_focales(region, magnitud_min)
+    
+    # Validación
+    validar_catalogo,       # validar_catalogo(df) -> QualityReport
+    validacion_rapida,      # validacion_rapida(df) -> float
+    
+    # Configuración
+    get_config,             # get_config() -> SeismexConfig
+    configure,              # configure(**kwargs)
+    
+    # Caché
+    get_cache,              # get_cache() -> CacheManager
+    clear_cache,            # clear_cache()
+    estado_cache,           # estado_cache() -> str
+    info_conectores,        # info_conectores() -> str
+)
+```
+
+### Clases Principales
+
+```python
+from seismex.data import (
+    # Conectores
+    ConectorSSN,
+    ConectorUSGS,
+    ConectorISC,
+    ConectorIRIS,
+    
+    # Base
+    ConectorBase,
+    QueryParams,
+    DownloadResult,
+    
+    # Configuración
+    SeismexConfig,
+    ConfigManager,
+    
+    # Caché
+    CacheManager,
+    CacheEntry,
+    
+    # Calidad
+    QualityValidator,
+    QualityReport,
+    
+    # Constantes
+    CATALOG_COLUMNS,
+    REGIONES_MEXICO,
+)
 ```
 
 ---
@@ -473,3 +603,4 @@ class ConectorBase(ABC):
 
 - [`seismex.core`](../core/README.md) - Clase CatalogoSismico
 - [`seismex.analysis`](../analysis/README.md) - Análisis de catálogos
+- [`seismex.visualization`](../visualization/README.md) - Visualización
