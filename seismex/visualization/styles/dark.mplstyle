@@ -1,0 +1,60 @@
+# ============================================================================
+# SEISMEX - Estilo Modo Oscuro
+# ============================================================================
+# Para presentaciones y visualización en pantalla
+# ============================================================================
+
+# Fuentes
+font.family: sans-serif
+font.sans-serif: Arial, Helvetica, DejaVu Sans
+font.size: 10
+
+# Tamaños de texto
+axes.labelsize: 12
+axes.titlesize: 14
+xtick.labelsize: 10
+ytick.labelsize: 10
+legend.fontsize: 10
+figure.titlesize: 16
+
+# Líneas y bordes
+axes.linewidth: 1.2
+lines.linewidth: 1.5
+lines.markersize: 7
+patch.linewidth: 0.8
+
+# Grid
+axes.grid: True
+grid.alpha: 0.4
+grid.linestyle: -
+grid.linewidth: 0.5
+grid.color: #0f3460
+
+# Colores (tema oscuro)
+figure.facecolor: #1a1a2e
+axes.facecolor: #16213e
+axes.edgecolor: #e94560
+text.color: #eaeaea
+axes.labelcolor: #eaeaea
+xtick.color: #eaeaea
+ytick.color: #eaeaea
+
+# Leyenda
+legend.facecolor: #16213e
+legend.edgecolor: #e94560
+legend.framealpha: 0.9
+legend.fancybox: True
+legend.shadow: False
+
+# Figuras
+figure.dpi: 100
+savefig.dpi: 150
+savefig.bbox: tight
+savefig.facecolor: #1a1a2e
+savefig.edgecolor: none
+
+# Colormaps (mejor contraste en oscuro)
+image.cmap: plasma
+
+# Ciclo de colores para líneas
+axes.prop_cycle: cycler('color', ['#e94560', '#0f4c75', '#3fc1c9', '#f5f5f5', '#fc5185', '#f9ed69', '#6a2c70', '#b83b5e'])

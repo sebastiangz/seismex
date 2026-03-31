@@ -1,0 +1,70 @@
+# ============================================================================
+# SEISMEX - Estilo para Presentaciones
+# ============================================================================
+# Optimizado para diapositivas y proyección
+# Texto más grande, colores vivos
+# ============================================================================
+
+# Fuentes
+font.family: sans-serif
+font.sans-serif: Arial, Helvetica, DejaVu Sans
+font.size: 14
+
+# Tamaños de texto (grandes para proyección)
+axes.labelsize: 16
+axes.titlesize: 18
+axes.titleweight: bold
+xtick.labelsize: 12
+ytick.labelsize: 12
+legend.fontsize: 12
+figure.titlesize: 20
+figure.titleweight: bold
+
+# Líneas y bordes (más gruesas)
+axes.linewidth: 1.5
+lines.linewidth: 2.0
+lines.markersize: 8
+patch.linewidth: 1.0
+
+# Grid
+axes.grid: True
+grid.alpha: 0.4
+grid.linestyle: -
+grid.linewidth: 0.8
+grid.color: #AAAAAA
+
+# Colores
+axes.facecolor: white
+axes.edgecolor: #333333
+figure.facecolor: white
+text.color: #222222
+axes.labelcolor: #222222
+xtick.color: #333333
+ytick.color: #333333
+
+# Leyenda
+legend.framealpha: 0.95
+legend.edgecolor: #666666
+legend.fancybox: True
+legend.shadow: True
+legend.borderpad: 0.5
+
+# Figuras
+figure.dpi: 100
+savefig.dpi: 150
+savefig.bbox: tight
+savefig.pad_inches: 0.2
+
+# Colormaps
+image.cmap: viridis
+
+# Ciclo de colores (alto contraste)
+axes.prop_cycle: cycler('color', ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f'])
+
+# Ticks
+xtick.major.size: 6
+ytick.major.size: 6
+xtick.minor.size: 3
+ytick.minor.size: 3
+xtick.major.width: 1.2
+ytick.major.width: 1.2

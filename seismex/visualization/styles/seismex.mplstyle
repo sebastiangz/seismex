@@ -1,0 +1,70 @@
+# ============================================================================
+# SEISMEX - Estilo Principal
+# ============================================================================
+# Estilo optimizado para visualización de datos sísmicos
+# Autor: SEISMEX Project
+# ============================================================================
+
+# Fuentes
+font.family: sans-serif
+font.sans-serif: Arial, Helvetica, DejaVu Sans, Liberation Sans
+font.size: 10
+
+# Tamaños de texto
+axes.labelsize: 11
+axes.titlesize: 12
+axes.titleweight: bold
+xtick.labelsize: 9
+ytick.labelsize: 9
+legend.fontsize: 9
+figure.titlesize: 14
+figure.titleweight: bold
+
+# Líneas y bordes
+axes.linewidth: 1.0
+lines.linewidth: 1.2
+lines.markersize: 6
+patch.linewidth: 0.5
+
+# Grid
+axes.grid: True
+grid.alpha: 0.3
+grid.linestyle: --
+grid.linewidth: 0.5
+grid.color: #CCCCCC
+
+# Colores
+axes.facecolor: white
+axes.edgecolor: #333333
+figure.facecolor: white
+figure.edgecolor: white
+text.color: #333333
+axes.labelcolor: #333333
+xtick.color: #333333
+ytick.color: #333333
+
+# Leyenda
+legend.framealpha: 0.9
+legend.edgecolor: #CCCCCC
+legend.fancybox: True
+legend.shadow: False
+
+# Figuras
+figure.dpi: 100
+savefig.dpi: 150
+savefig.bbox: tight
+savefig.pad_inches: 0.1
+savefig.format: png
+
+# Imágenes
+image.cmap: viridis
+image.interpolation: nearest
+
+# Contornos
+contour.negative_linestyle: dashed
+
+# Histogramas
+hist.bins: auto
+
+# Scatter
+scatter.edgecolors: face

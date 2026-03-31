@@ -1,0 +1,61 @@
+# ============================================================================
+# SEISMEX - Estilo Minimalista
+# ============================================================================
+# Diseño limpio con elementos mínimos
+# ============================================================================
+
+# Fuentes
+font.family: serif
+font.serif: Times New Roman, DejaVu Serif, Palatino
+font.size: 9
+
+# Tamaños de texto
+axes.labelsize: 10
+axes.titlesize: 11
+xtick.labelsize: 8
+ytick.labelsize: 8
+legend.fontsize: 8
+figure.titlesize: 12
+
+# Líneas y bordes
+axes.linewidth: 0.5
+lines.linewidth: 0.8
+lines.markersize: 4
+patch.linewidth: 0.4
+
+# Grid (desactivado por defecto)
+axes.grid: False
+
+# Colores
+axes.facecolor: white
+axes.edgecolor: #666666
+figure.facecolor: white
+text.color: #333333
+axes.labelcolor: #333333
+xtick.color: #666666
+ytick.color: #666666
+
+# Leyenda
+legend.framealpha: 0.0
+legend.edgecolor: none
+legend.fancybox: False
+legend.shadow: False
+legend.frameon: False
+
+# Figuras
+figure.dpi: 100
+savefig.dpi: 200
+savefig.bbox: tight
+savefig.pad_inches: 0.02
+
+# Spines (solo izquierda y abajo)
+axes.spines.top: False
+axes.spines.right: False
+
+# Ticks
+xtick.direction: out
+ytick.direction: out
+xtick.major.size: 3
+ytick.major.size: 3
+xtick.minor.size: 1.5
+ytick.minor.size: 1.5

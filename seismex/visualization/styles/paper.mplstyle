@@ -1,0 +1,65 @@
+# ============================================================================
+# SEISMEX - Estilo para Publicaciones Científicas
+# ============================================================================
+# Optimizado para figuras de artículos y reportes
+# Compatible con requerimientos de revistas (AGU, Nature, etc.)
+# ============================================================================
+
+# Fuentes
+font.family: sans-serif
+font.sans-serif: Arial, Helvetica, DejaVu Sans
+font.size: 10
+
+# Tamaños de texto (apropiados para columnas de revista)
+axes.labelsize: 11
+axes.titlesize: 12
+xtick.labelsize: 9
+ytick.labelsize: 9
+legend.fontsize: 9
+figure.titlesize: 14
+
+# Líneas y bordes
+axes.linewidth: 0.8
+lines.linewidth: 1.0
+lines.markersize: 5
+patch.linewidth: 0.5
+
+# Grid
+axes.grid: True
+grid.alpha: 0.3
+grid.linestyle: :
+grid.linewidth: 0.4
+grid.color: #888888
+
+# Colores (neutros para impresión)
+axes.facecolor: white
+axes.edgecolor: black
+figure.facecolor: white
+text.color: black
+axes.labelcolor: black
+xtick.color: black
+ytick.color: black
+
+# Leyenda
+legend.framealpha: 1.0
+legend.edgecolor: black
+legend.fancybox: False
+legend.shadow: False
+legend.frameon: True
+
+# Figuras
+figure.dpi: 150
+savefig.dpi: 300
+savefig.bbox: tight
+savefig.pad_inches: 0.05
+savefig.format: pdf
+
+# Colormaps
+image.cmap: viridis
+
+# Histogramas
+hist.bins: auto
+
+# Configuración para impresión
+pdf.fonttype: 42
+ps.fonttype: 42
