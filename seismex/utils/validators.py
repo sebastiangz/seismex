@@ -8,7 +8,8 @@ Incluye:
 - Validación de coordenadas
 - Validación de magnitudes y profundidades
 - Detección de outliers
-- Reportes de calidad
+- Reporte de calidad de catálogos
+- Limpieza de datos
 
 Ejemplo de uso:
     >>> from seismex.utils.validators import validar_catalogo_completo
@@ -24,7 +25,10 @@ from __future__ import annotations
 import warnings
 import logging
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Union, Tuple, Any
+from typing import (
+    Optional, List, Dict, Any, Union, Tuple,
+    Callable, Literal
+)
 from datetime import datetime
 
 import numpy as np
@@ -37,56 +41,78 @@ from seismex.utils.constants import (
 
 logger = logging.getLogger(__name__)
 
-
 # =============================================================================
-# DATACLASSES PARA RESULTADOS
+# DATACLASSES PARA REPORTES
 # =============================================================================
 
 @dataclass
-class IssueValidacion:
-    """Representa un problema de validación."""
-    tipo: str  # 'error', 'advertencia', 'info'
-    columna: str
+class ProblemaValidacion:
+    """Representa un problema encontrado durante la validación."""
+    tipo: Literal['error', 'advertencia', 'info']
     mensaje: str
+    columna: Optional[str] = None
+    indices: Optional[List[int]] = None
     n_afectados: int = 0
-    indices: List[int] = field(default_factory=list)
 
 
 @dataclass
 class ReporteCalidad:
-    """Reporte completo de calidad del catálogo."""
+    """
+    Reporte completo de calidad de un catálogo sísmico.
+    
+    Attributes:
+        n_eventos: Número total de eventos
+        n_validos: Eventos que pasan todas las validaciones
+        pct_coordenadas_validas: Porcentaje de coordenadas válidas
+        pct_magnitudes_validas: Porcentaje de magnitudes válidas
+        pct_profundidades_validas: Porcentaje de profundidades válidas
+        pct_fechas_validas: Porcentaje de fechas válidas
+        n_duplicados: Número de duplicados detectados
+        n_outliers: Número de outliers potenciales
+        problemas: Lista de problemas encontrados
+        estadisticas: Diccionario con estadísticas adicionales
+    """
     n_eventos: int
-    n_columnas: int
-    issues: List[IssueValidacion] = field(default_factory=list)
+    n_validos: int = 0
+    pct_coordenadas_validas: float = 0.0
+    pct_magnitudes_validas: float = 0.0
+    pct_profundidades_validas: float = 0.0
+    pct_fechas_validas: float = 0.0
+    n_duplicados: int = 0
+    n_outliers: int = 0
+    problemas: List[ProblemaValidacion] = field(default_factory=list)
     estadisticas: Dict[str, Any] = field(default_factory=dict)
-    fecha_reporte: datetime = field(default_factory=datetime.now)
     
     @property
-    def n_errores(self) -> int:
-        return sum(1 for i in self.issues if i.tipo == 'error')
-    
-    @property
-    def n_advertencias(self) -> int:
-        return sum(1 for i in self.issues if i.tipo == 'advertencia')
-    
-    @property
-    def es_valido(self) -> bool:
-        return self.n_errores == 0
-    
-    @property
-    def score(self) -> float:
-        """Calcula un score de calidad (0-100)."""
+    def puntuacion(self) -> float:
+        """Puntuación de calidad (0-100)."""
         if self.n_eventos == 0:
             return 0.0
         
-        penalizacion = 0.0
-        for issue in self.issues:
-            if issue.tipo == 'error':
-                penalizacion += 20.0 * (issue.n_afectados / self.n_eventos)
-            elif issue.tipo == 'advertencia':
-                penalizacion += 5.0 * (issue.n_afectados / self.n_eventos)
+        pesos = {
+            'coordenadas': 0.3,
+            'magnitudes': 0.25,
+            'profundidades': 0.2,
+            'fechas': 0.15,
+            'duplicados': 0.1
+        }
         
-        return max(0.0, min(100.0, 100.0 - penalizacion))
+        pct_sin_duplicados = 100 * (1 - self.n_duplicados / self.n_eventos)
+        
+        score = (
+            pesos['coordenadas'] * self.pct_coordenadas_validas +
+            pesos['magnitudes'] * self.pct_magnitudes_validas +
+            pesos['profundidades'] * self.pct_profundidades_validas +
+            pesos['fechas'] * self.pct_fechas_validas +
+            pesos['duplicados'] * pct_sin_duplicados
+        )
+        
+        return round(score, 1)
+    
+    @property
+    def es_valido(self) -> bool:
+        """El catálogo es usable si tiene puntuación >= 70."""
+        return self.puntuacion >= 70
     
     def __str__(self) -> str:
         lineas = [
@@ -94,59 +120,59 @@ class ReporteCalidad:
             "REPORTE DE CALIDAD DEL CATÁLOGO",
             "═" * 50,
             f"Total eventos: {self.n_eventos:,}",
-            f"Columnas: {self.n_columnas}",
-            f"Score de calidad: {self.score:.1f}/100",
-            f"Errores: {self.n_errores}",
-            f"Advertencias: {self.n_advertencias}",
-            "-" * 50,
+            f"Eventos válidos: {self.n_validos:,} ({100*self.n_validos/self.n_eventos:.1f}%)" if self.n_eventos > 0 else "Eventos válidos: 0",
+            "",
+            "─" * 50,
+            "VALIDACIONES",
+            "─" * 50,
+            f"Coordenadas válidas: {self.pct_coordenadas_validas:.1f}%",
+            f"Magnitudes válidas: {self.pct_magnitudes_validas:.1f}%",
+            f"Profundidades válidas: {self.pct_profundidades_validas:.1f}%",
+            f"Fechas válidas: {self.pct_fechas_validas:.1f}%",
+            "",
+            f"Duplicados detectados: {self.n_duplicados}",
+            f"Outliers potenciales: {self.n_outliers}",
+            "",
+            "─" * 50,
+            f"PUNTUACIÓN DE CALIDAD: {self.puntuacion}/100",
+            f"Estado: {'✅ VÁLIDO' if self.es_valido else '⚠️ REVISAR'}",
+            "═" * 50,
         ]
         
-        if self.issues:
+        if self.problemas:
+            lineas.append("")
             lineas.append("PROBLEMAS ENCONTRADOS:")
-            for issue in self.issues:
-                simbolo = "❌" if issue.tipo == 'error' else "⚠️" if issue.tipo == 'advertencia' else "ℹ️"
-                lineas.append(f"  {simbolo} [{issue.columna}] {issue.mensaje}")
-                if issue.n_afectados > 0:
-                    lineas.append(f"      Afectados: {issue.n_afectados:,}")
-        
-        if self.estadisticas:
-            lineas.append("-" * 50)
-            lineas.append("ESTADÍSTICAS:")
-            for key, value in self.estadisticas.items():
-                if isinstance(value, float):
-                    lineas.append(f"  {key}: {value:.2f}")
-                else:
-                    lineas.append(f"  {key}: {value}")
-        
-        lineas.append("═" * 50)
+            for p in self.problemas[:10]:  # Mostrar máximo 10
+                icono = "❌" if p.tipo == 'error' else "⚠️" if p.tipo == 'advertencia' else "ℹ️"
+                lineas.append(f"  {icono} {p.mensaje}")
+            if len(self.problemas) > 10:
+                lineas.append(f"  ... y {len(self.problemas) - 10} más")
         
         return "\n".join(lineas)
     
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> Dict[str, Any]:
         """Convierte el reporte a diccionario."""
         return {
             'n_eventos': self.n_eventos,
-            'n_columnas': self.n_columnas,
-            'n_errores': self.n_errores,
-            'n_advertencias': self.n_advertencias,
+            'n_validos': self.n_validos,
+            'pct_coordenadas_validas': self.pct_coordenadas_validas,
+            'pct_magnitudes_validas': self.pct_magnitudes_validas,
+            'pct_profundidades_validas': self.pct_profundidades_validas,
+            'pct_fechas_validas': self.pct_fechas_validas,
+            'n_duplicados': self.n_duplicados,
+            'n_outliers': self.n_outliers,
+            'puntuacion': self.puntuacion,
             'es_valido': self.es_valido,
-            'score': self.score,
-            'issues': [
-                {
-                    'tipo': i.tipo,
-                    'columna': i.columna,
-                    'mensaje': i.mensaje,
-                    'n_afectados': i.n_afectados
-                }
-                for i in self.issues
+            'problemas': [
+                {'tipo': p.tipo, 'mensaje': p.mensaje, 'columna': p.columna, 'n_afectados': p.n_afectados}
+                for p in self.problemas
             ],
-            'estadisticas': self.estadisticas,
-            'fecha_reporte': self.fecha_reporte.isoformat()
+            'estadisticas': self.estadisticas
         }
 
 
 # =============================================================================
-# VALIDADORES INDIVIDUALES
+# VALIDACIÓN DE COORDENADAS
 # =============================================================================
 
 def validar_coordenadas(
@@ -158,52 +184,76 @@ def validar_coordenadas(
     lon_max: float = 180.0
 ) -> bool:
     """
-    Valida que las coordenadas estén en el rango especificado.
+    Valida que las coordenadas estén dentro de rangos válidos.
     
     Args:
         lat: Latitud a validar
         lon: Longitud a validar
-        lat_min, lat_max: Rango válido de latitud
-        lon_min, lon_max: Rango válido de longitud
+        lat_min, lat_max: Rango de latitud permitido
+        lon_min, lon_max: Rango de longitud permitido
         
     Returns:
         True si las coordenadas son válidas
-        
-    Example:
-        >>> validar_coordenadas(19.24, -103.72)
-        True
-        >>> validar_coordenadas(100, -103.72)  # Latitud inválida
-        False
     """
-    try:
-        lat = float(lat)
-        lon = float(lon)
-    except (ValueError, TypeError):
+    if pd.isna(lat) or pd.isna(lon):
         return False
     
-    if np.isnan(lat) or np.isnan(lon):
-        return False
-    
-    return lat_min <= lat <= lat_max and lon_min <= lon <= lon_max
+    return (lat_min <= lat <= lat_max) and (lon_min <= lon <= lon_max)
 
 
-def validar_coordenadas_mexico(lat: float, lon: float) -> bool:
+def validar_coordenadas_mexico(
+    lat: float,
+    lon: float,
+    buffer_grados: float = 1.0
+) -> bool:
     """
-    Valida que las coordenadas estén dentro de México.
+    Valida que las coordenadas estén dentro de México (con buffer).
     
     Args:
-        lat: Latitud
-        lon: Longitud
+        lat, lon: Coordenadas a validar
+        buffer_grados: Margen adicional alrededor de México
         
     Returns:
-        True si está en México
+        True si está dentro de México (± buffer)
     """
     return validar_coordenadas(
         lat, lon,
-        lat_min=MEXICO_LAT_MIN, lat_max=MEXICO_LAT_MAX,
-        lon_min=MEXICO_LON_MIN, lon_max=MEXICO_LON_MAX
+        lat_min=MEXICO_LAT_MIN - buffer_grados,
+        lat_max=MEXICO_LAT_MAX + buffer_grados,
+        lon_min=MEXICO_LON_MIN - buffer_grados,
+        lon_max=MEXICO_LON_MAX + buffer_grados
     )
 
+
+def validar_coordenadas_array(
+    lats: np.ndarray,
+    lons: np.ndarray,
+    lat_min: float = -90.0,
+    lat_max: float = 90.0,
+    lon_min: float = -180.0,
+    lon_max: float = 180.0
+) -> np.ndarray:
+    """
+    Versión vectorizada de validación de coordenadas.
+    
+    Returns:
+        Array booleano con True para coordenadas válidas
+    """
+    lats = np.asarray(lats)
+    lons = np.asarray(lons)
+    
+    validos = (
+        ~np.isnan(lats) & ~np.isnan(lons) &
+        (lats >= lat_min) & (lats <= lat_max) &
+        (lons >= lon_min) & (lons <= lon_max)
+    )
+    
+    return validos
+
+
+# =============================================================================
+# VALIDACIÓN DE MAGNITUD
+# =============================================================================
 
 def validar_magnitud(
     magnitud: float,
@@ -211,25 +261,37 @@ def validar_magnitud(
     mag_max: float = 10.0
 ) -> bool:
     """
-    Valida que la magnitud esté en rango razonable.
+    Valida que una magnitud esté en rango razonable.
     
     Args:
-        magnitud: Magnitud a validar
-        mag_min, mag_max: Rango válido
+        magnitud: Valor de magnitud
+        mag_min: Magnitud mínima permitida
+        mag_max: Magnitud máxima permitida
         
     Returns:
         True si la magnitud es válida
     """
-    try:
-        magnitud = float(magnitud)
-    except (ValueError, TypeError):
-        return False
-    
-    if np.isnan(magnitud):
+    if pd.isna(magnitud):
         return False
     
     return mag_min <= magnitud <= mag_max
 
+
+def validar_magnitud_array(
+    magnitudes: np.ndarray,
+    mag_min: float = -2.0,
+    mag_max: float = 10.0
+) -> np.ndarray:
+    """
+    Versión vectorizada de validación de magnitudes.
+    """
+    magnitudes = np.asarray(magnitudes)
+    return ~np.isnan(magnitudes) & (magnitudes >= mag_min) & (magnitudes <= mag_max)
+
+
+# =============================================================================
+# VALIDACIÓN DE PROFUNDIDAD
+# =============================================================================
 
 def validar_profundidad(
     profundidad: float,
@@ -237,32 +299,53 @@ def validar_profundidad(
     prof_max: float = 700.0
 ) -> bool:
     """
-    Valida que la profundidad esté en rango razonable.
+    Valida que una profundidad esté en rango razonable.
+    
+    La profundidad máxima de sismos en la Tierra es ~700 km
+    (zona de transición del manto).
     
     Args:
         profundidad: Profundidad en km
-        prof_min, prof_max: Rango válido
+        prof_min: Profundidad mínima permitida
+        prof_max: Profundidad máxima permitida
         
     Returns:
         True si la profundidad es válida
     """
-    try:
-        profundidad = float(profundidad)
-    except (ValueError, TypeError):
-        return False
-    
-    if np.isnan(profundidad):
+    if pd.isna(profundidad):
         return False
     
     return prof_min <= profundidad <= prof_max
 
 
-def validar_fecha(fecha: Any) -> bool:
+def validar_profundidad_array(
+    profundidades: np.ndarray,
+    prof_min: float = 0.0,
+    prof_max: float = 700.0
+) -> np.ndarray:
     """
-    Valida que la fecha sea válida.
+    Versión vectorizada de validación de profundidades.
+    """
+    profundidades = np.asarray(profundidades)
+    return ~np.isnan(profundidades) & (profundidades >= prof_min) & (profundidades <= prof_max)
+
+
+# =============================================================================
+# VALIDACIÓN DE FECHAS
+# =============================================================================
+
+def validar_fecha(
+    fecha: Any,
+    fecha_min: Optional[datetime] = None,
+    fecha_max: Optional[datetime] = None
+) -> bool:
+    """
+    Valida que una fecha sea válida y esté en rango.
     
     Args:
-        fecha: Fecha a validar (datetime, string, timestamp)
+        fecha: Fecha a validar (datetime, Timestamp, o string)
+        fecha_min: Fecha mínima permitida
+        fecha_max: Fecha máxima permitida (default: ahora)
         
     Returns:
         True si la fecha es válida
@@ -271,194 +354,121 @@ def validar_fecha(fecha: Any) -> bool:
         return False
     
     try:
-        pd.to_datetime(fecha)
+        fecha_dt = pd.to_datetime(fecha)
+        
+        if fecha_min and fecha_dt < pd.to_datetime(fecha_min):
+            return False
+        
+        if fecha_max:
+            if fecha_dt > pd.to_datetime(fecha_max):
+                return False
+        else:
+            # No permitir fechas futuras
+            if fecha_dt > pd.Timestamp.now():
+                return False
+        
         return True
-    except:
+    except Exception:
         return False
 
 
+def validar_fechas_array(
+    fechas: pd.Series,
+    fecha_min: Optional[datetime] = None,
+    fecha_max: Optional[datetime] = None
+) -> np.ndarray:
+    """
+    Versión vectorizada de validación de fechas.
+    """
+    # Convertir a datetime
+    fechas_dt = pd.to_datetime(fechas, errors='coerce')
+    
+    validos = ~fechas_dt.isna()
+    
+    if fecha_min:
+        validos &= fechas_dt >= pd.to_datetime(fecha_min)
+    
+    if fecha_max:
+        validos &= fechas_dt <= pd.to_datetime(fecha_max)
+    else:
+        validos &= fechas_dt <= pd.Timestamp.now()
+    
+    return validos.values
+
+
 # =============================================================================
-# VALIDACIÓN DE CATÁLOGOS
+# DETECCIÓN DE DUPLICADOS
 # =============================================================================
 
-def validar_catalogo_completo(
+def detectar_duplicados(
     df: pd.DataFrame,
-    columnas_requeridas: Optional[List[str]] = None,
-    lat_col: str = 'latitud',
-    lon_col: str = 'longitud',
-    mag_col: str = 'magnitud',
-    prof_col: str = 'profundidad_km',
-    fecha_col: str = 'fecha',
-    validar_mexico: bool = False
-) -> ReporteCalidad:
+    tolerancia_km: float = 50.0,
+    tolerancia_seg: float = 60.0,
+    columna_lat: str = 'latitud',
+    columna_lon: str = 'longitud',
+    columna_fecha: str = 'fecha'
+) -> np.ndarray:
     """
-    Realiza validación completa de un catálogo sísmico.
+    Detecta eventos duplicados por proximidad espacial y temporal.
     
     Args:
-        df: DataFrame con el catálogo
-        columnas_requeridas: Lista de columnas que deben existir
-        lat_col, lon_col, mag_col, prof_col, fecha_col: Nombres de columnas
-        validar_mexico: Si True, verifica que eventos estén en México
+        df: DataFrame con eventos
+        tolerancia_km: Distancia máxima para considerar duplicado (km)
+        tolerancia_seg: Diferencia temporal máxima (segundos)
+        columna_lat, columna_lon: Nombres de columnas de coordenadas
+        columna_fecha: Nombre de columna de fecha
         
     Returns:
-        ReporteCalidad con todos los problemas encontrados
-        
-    Example:
-        >>> reporte = validar_catalogo_completo(catalogo)
-        >>> print(reporte)
-        >>> if reporte.es_valido:
-        ...     print("Catálogo válido")
+        Array booleano donde True indica un duplicado
     """
-    if columnas_requeridas is None:
-        columnas_requeridas = [fecha_col, lat_col, lon_col, mag_col]
+    n = len(df)
+    es_duplicado = np.zeros(n, dtype=bool)
     
-    issues = []
-    estadisticas = {}
+    if n < 2:
+        return es_duplicado
     
-    # Verificar columnas requeridas
-    columnas_faltantes = [c for c in columnas_requeridas if c not in df.columns]
-    if columnas_faltantes:
-        issues.append(IssueValidacion(
-            tipo='error',
-            columna='estructura',
-            mensaje=f"Columnas faltantes: {', '.join(columnas_faltantes)}",
-            n_afectados=len(df)
-        ))
-        return ReporteCalidad(
-            n_eventos=len(df),
-            n_columnas=len(df.columns),
-            issues=issues
-        )
+    # Ordenar por fecha
+    df_sorted = df.sort_values(columna_fecha).reset_index(drop=True)
     
-    # Validar coordenadas
-    if lat_col in df.columns and lon_col in df.columns:
-        if validar_mexico:
-            coords_invalidas = ~df.apply(
-                lambda row: validar_coordenadas_mexico(row[lat_col], row[lon_col]),
-                axis=1
-            )
-        else:
-            coords_invalidas = ~df.apply(
-                lambda row: validar_coordenadas(row[lat_col], row[lon_col]),
-                axis=1
-            )
-        
-        n_invalidas = coords_invalidas.sum()
-        if n_invalidas > 0:
-            issues.append(IssueValidacion(
-                tipo='error',
-                columna='coordenadas',
-                mensaje="Coordenadas fuera de rango válido",
-                n_afectados=n_invalidas,
-                indices=df.index[coords_invalidas].tolist()[:100]
-            ))
-        
-        estadisticas['lat_min'] = df[lat_col].min()
-        estadisticas['lat_max'] = df[lat_col].max()
-        estadisticas['lon_min'] = df[lon_col].min()
-        estadisticas['lon_max'] = df[lon_col].max()
+    # Convertir a arrays
+    lats = df_sorted[columna_lat].values
+    lons = df_sorted[columna_lon].values
+    fechas = pd.to_datetime(df_sorted[columna_fecha])
     
-    # Validar magnitudes
-    if mag_col in df.columns:
-        mags_invalidas = ~df[mag_col].apply(validar_magnitud)
-        n_invalidas = mags_invalidas.sum()
-        
-        if n_invalidas > 0:
-            issues.append(IssueValidacion(
-                tipo='advertencia',
-                columna='magnitud',
-                mensaje="Magnitudes fuera de rango [-2, 10]",
-                n_afectados=n_invalidas
-            ))
-        
-        estadisticas['mag_min'] = df[mag_col].min()
-        estadisticas['mag_max'] = df[mag_col].max()
-        estadisticas['mag_media'] = df[mag_col].mean()
-        estadisticas['mag_mediana'] = df[mag_col].median()
+    # Factor de conversión aproximado
+    deg_to_km = 111.0
+    tol_deg = tolerancia_km / deg_to_km
     
-    # Validar profundidades
-    if prof_col in df.columns:
-        profs_invalidas = ~df[prof_col].apply(validar_profundidad)
-        n_invalidas = profs_invalidas.sum()
+    for i in range(n):
+        if es_duplicado[i]:
+            continue
         
-        if n_invalidas > 0:
-            issues.append(IssueValidacion(
-                tipo='advertencia',
-                columna='profundidad',
-                mensaje="Profundidades fuera de rango [0, 700] km",
-                n_afectados=n_invalidas
-            ))
-        
-        # Verificar profundidades negativas
-        profs_negativas = (df[prof_col] < 0).sum()
-        if profs_negativas > 0:
-            issues.append(IssueValidacion(
-                tipo='error',
-                columna='profundidad',
-                mensaje="Profundidades negativas detectadas",
-                n_afectados=profs_negativas
-            ))
-        
-        estadisticas['prof_min'] = df[prof_col].min()
-        estadisticas['prof_max'] = df[prof_col].max()
-        estadisticas['prof_media'] = df[prof_col].mean()
-    
-    # Validar fechas
-    if fecha_col in df.columns:
-        fechas_invalidas = ~df[fecha_col].apply(validar_fecha)
-        n_invalidas = fechas_invalidas.sum()
-        
-        if n_invalidas > 0:
-            issues.append(IssueValidacion(
-                tipo='error',
-                columna='fecha',
-                mensaje="Fechas inválidas o faltantes",
-                n_afectados=n_invalidas
-            ))
-        
-        fechas_validas = pd.to_datetime(df.loc[~fechas_invalidas, fecha_col], errors='coerce')
-        if len(fechas_validas) > 0:
-            estadisticas['fecha_min'] = fechas_validas.min()
-            estadisticas['fecha_max'] = fechas_validas.max()
-    
-    # Verificar valores faltantes
-    for col in columnas_requeridas:
-        if col in df.columns:
-            n_nulos = df[col].isna().sum()
-            pct_nulos = 100 * n_nulos / len(df)
+        for j in range(i + 1, n):
+            # Verificar tiempo primero (más rápido)
+            dt = abs((fechas.iloc[j] - fechas.iloc[i]).total_seconds())
+            if dt > tolerancia_seg:
+                break  # Ya ordenado, no hay más candidatos
             
-            if pct_nulos > 0:
-                tipo = 'error' if pct_nulos > 10 else 'advertencia' if pct_nulos > 1 else 'info'
-                issues.append(IssueValidacion(
-                    tipo=tipo,
-                    columna=col,
-                    mensaje=f"Valores faltantes: {pct_nulos:.1f}%",
-                    n_afectados=n_nulos
-                ))
+            # Verificar distancia aproximada
+            dlat = abs(lats[j] - lats[i])
+            dlon = abs(lons[j] - lons[i])
+            
+            if dlat < tol_deg and dlon < tol_deg:
+                dist_aprox = np.sqrt(dlat**2 + dlon**2) * deg_to_km
+                if dist_aprox < tolerancia_km:
+                    es_duplicado[j] = True
     
-    # Verificar duplicados
-    if fecha_col in df.columns and lat_col in df.columns and lon_col in df.columns:
-        duplicados = df.duplicated(subset=[fecha_col, lat_col, lon_col], keep='first')
-        n_duplicados = duplicados.sum()
-        
-        if n_duplicados > 0:
-            issues.append(IssueValidacion(
-                tipo='advertencia',
-                columna='duplicados',
-                mensaje="Eventos duplicados (misma fecha y ubicación)",
-                n_afectados=n_duplicados
-            ))
-    
-    estadisticas['n_eventos'] = len(df)
-    estadisticas['n_columnas'] = len(df.columns)
-    estadisticas['columnas'] = list(df.columns)
-    
-    return ReporteCalidad(
-        n_eventos=len(df),
-        n_columnas=len(df.columns),
-        issues=issues,
-        estadisticas=estadisticas
-    )
+    return es_duplicado
+
+
+def contar_duplicados(
+    df: pd.DataFrame,
+    **kwargs
+) -> int:
+    """
+    Cuenta el número de duplicados en un DataFrame.
+    """
+    return np.sum(detectar_duplicados(df, **kwargs))
 
 
 # =============================================================================
@@ -466,27 +476,25 @@ def validar_catalogo_completo(
 # =============================================================================
 
 def detectar_outliers_iqr(
-    valores: Union[pd.Series, np.ndarray],
+    valores: np.ndarray,
     factor: float = 1.5
 ) -> np.ndarray:
     """
-    Detecta outliers usando el método IQR (Interquartile Range).
+    Detecta outliers usando el método del rango intercuartil (IQR).
     
     Args:
-        valores: Serie de valores
-        factor: Factor multiplicador del IQR (default: 1.5)
+        valores: Array de valores numéricos
+        factor: Multiplicador del IQR (1.5 = outliers moderados, 3.0 = extremos)
         
     Returns:
-        Array booleano indicando outliers
-        
-    Example:
-        >>> outliers = detectar_outliers_iqr(catalogo['magnitud'])
-        >>> print(f"Outliers: {outliers.sum()}")
+        Array booleano donde True indica un outlier
     """
     valores = np.asarray(valores)
+    
+    # Ignorar NaN para calcular cuartiles
     valores_validos = valores[~np.isnan(valores)]
     
-    if len(valores_validos) == 0:
+    if len(valores_validos) < 4:
         return np.zeros(len(valores), dtype=bool)
     
     q1 = np.percentile(valores_validos, 25)
@@ -496,216 +504,370 @@ def detectar_outliers_iqr(
     limite_inferior = q1 - factor * iqr
     limite_superior = q3 + factor * iqr
     
-    return (valores < limite_inferior) | (valores > limite_superior)
+    es_outlier = (valores < limite_inferior) | (valores > limite_superior)
+    
+    return es_outlier
 
 
 def detectar_outliers_zscore(
-    valores: Union[pd.Series, np.ndarray],
+    valores: np.ndarray,
     umbral: float = 3.0
 ) -> np.ndarray:
     """
-    Detecta outliers usando z-score.
+    Detecta outliers usando Z-score.
     
     Args:
-        valores: Serie de valores
-        umbral: Umbral de z-score (default: 3.0)
+        valores: Array de valores numéricos
+        umbral: Número de desviaciones estándar para considerar outlier
         
     Returns:
-        Array booleano indicando outliers
+        Array booleano donde True indica un outlier
     """
     valores = np.asarray(valores)
-    valores_validos = valores[~np.isnan(valores)]
     
-    if len(valores_validos) < 2:
-        return np.zeros(len(valores), dtype=bool)
-    
-    media = np.mean(valores_validos)
-    std = np.std(valores_validos)
+    # Calcular media y std ignorando NaN
+    media = np.nanmean(valores)
+    std = np.nanstd(valores)
     
     if std == 0:
         return np.zeros(len(valores), dtype=bool)
     
-    z_scores = np.abs((valores - media) / std)
+    zscore = np.abs((valores - media) / std)
     
-    return z_scores > umbral
+    return zscore > umbral
 
 
 def detectar_outliers(
     df: pd.DataFrame,
     columnas: Optional[List[str]] = None,
-    metodo: str = 'iqr',
-    factor: float = 1.5,
-    umbral_zscore: float = 3.0
+    metodo: Literal['iqr', 'zscore'] = 'iqr',
+    **kwargs
 ) -> pd.DataFrame:
     """
     Detecta outliers en múltiples columnas de un DataFrame.
     
     Args:
-        df: DataFrame a analizar
-        columnas: Columnas a verificar (si None, usa todas las numéricas)
+        df: DataFrame con datos
+        columnas: Lista de columnas a analizar (default: numéricas)
         metodo: 'iqr' o 'zscore'
-        factor: Factor IQR (para metodo='iqr')
-        umbral_zscore: Umbral z-score (para metodo='zscore')
+        **kwargs: Argumentos para el método de detección
         
     Returns:
-        DataFrame booleano con True en posiciones de outliers
-        
-    Example:
-        >>> outliers = detectar_outliers(catalogo, ['magnitud', 'profundidad_km'])
-        >>> eventos_outlier = catalogo[outliers.any(axis=1)]
+        DataFrame con columnas booleanas indicando outliers
     """
     if columnas is None:
         columnas = df.select_dtypes(include=[np.number]).columns.tolist()
     
     resultado = pd.DataFrame(index=df.index)
     
+    detector = detectar_outliers_iqr if metodo == 'iqr' else detectar_outliers_zscore
+    
     for col in columnas:
-        if col not in df.columns:
-            continue
-        
-        if metodo == 'iqr':
-            resultado[col] = detectar_outliers_iqr(df[col], factor)
-        elif metodo == 'zscore':
-            resultado[col] = detectar_outliers_zscore(df[col], umbral_zscore)
-        else:
-            raise ValueError(f"Método no soportado: {metodo}")
+        if col in df.columns:
+            resultado[f'{col}_outlier'] = detector(df[col].values, **kwargs)
     
     return resultado
 
 
 # =============================================================================
-# LIMPIEZA DE DATOS
+# VALIDACIÓN COMPLETA DE CATÁLOGO
+# =============================================================================
+
+def validar_catalogo_completo(
+    df: pd.DataFrame,
+    columna_lat: str = 'latitud',
+    columna_lon: str = 'longitud',
+    columna_mag: str = 'magnitud',
+    columna_prof: str = 'profundidad_km',
+    columna_fecha: str = 'fecha',
+    region: str = 'global',
+    detectar_dups: bool = True,
+    detectar_outs: bool = True
+) -> ReporteCalidad:
+    """
+    Realiza validación completa de un catálogo sísmico.
+    
+    Args:
+        df: DataFrame con catálogo
+        columna_lat, columna_lon: Columnas de coordenadas
+        columna_mag: Columna de magnitud
+        columna_prof: Columna de profundidad
+        columna_fecha: Columna de fecha
+        region: 'global' o 'mexico' (ajusta validación de coordenadas)
+        detectar_dups: Si detectar duplicados
+        detectar_outs: Si detectar outliers
+        
+    Returns:
+        ReporteCalidad con resultados de validación
+    """
+    n_eventos = len(df)
+    problemas = []
+    estadisticas = {}
+    
+    if n_eventos == 0:
+        return ReporteCalidad(
+            n_eventos=0,
+            problemas=[ProblemaValidacion('error', 'Catálogo vacío')]
+        )
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Validar coordenadas
+    # ─────────────────────────────────────────────────────────────────────────
+    if columna_lat in df.columns and columna_lon in df.columns:
+        if region == 'mexico':
+            coord_validas = validar_coordenadas_array(
+                df[columna_lat].values,
+                df[columna_lon].values,
+                lat_min=MEXICO_LAT_MIN - 1,
+                lat_max=MEXICO_LAT_MAX + 1,
+                lon_min=MEXICO_LON_MIN - 1,
+                lon_max=MEXICO_LON_MAX + 1
+            )
+        else:
+            coord_validas = validar_coordenadas_array(
+                df[columna_lat].values,
+                df[columna_lon].values
+            )
+        
+        pct_coord = 100 * np.sum(coord_validas) / n_eventos
+        n_coord_invalidas = n_eventos - np.sum(coord_validas)
+        
+        if n_coord_invalidas > 0:
+            problemas.append(ProblemaValidacion(
+                'advertencia' if pct_coord > 90 else 'error',
+                f'{n_coord_invalidas} eventos con coordenadas inválidas',
+                columna=columna_lat,
+                n_afectados=n_coord_invalidas
+            ))
+        
+        # Estadísticas
+        estadisticas['lat_min'] = float(df[columna_lat].min())
+        estadisticas['lat_max'] = float(df[columna_lat].max())
+        estadisticas['lon_min'] = float(df[columna_lon].min())
+        estadisticas['lon_max'] = float(df[columna_lon].max())
+    else:
+        pct_coord = 0.0
+        problemas.append(ProblemaValidacion(
+            'error',
+            'Columnas de coordenadas no encontradas',
+            n_afectados=n_eventos
+        ))
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Validar magnitudes
+    # ─────────────────────────────────────────────────────────────────────────
+    if columna_mag in df.columns:
+        mag_validas = validar_magnitud_array(df[columna_mag].values)
+        pct_mag = 100 * np.sum(mag_validas) / n_eventos
+        n_mag_invalidas = n_eventos - np.sum(mag_validas)
+        
+        if n_mag_invalidas > 0:
+            problemas.append(ProblemaValidacion(
+                'advertencia' if pct_mag > 95 else 'error',
+                f'{n_mag_invalidas} eventos con magnitud inválida',
+                columna=columna_mag,
+                n_afectados=n_mag_invalidas
+            ))
+        
+        estadisticas['mag_min'] = float(df[columna_mag].min())
+        estadisticas['mag_max'] = float(df[columna_mag].max())
+        estadisticas['mag_media'] = float(df[columna_mag].mean())
+    else:
+        pct_mag = 0.0
+        problemas.append(ProblemaValidacion(
+            'error',
+            'Columna de magnitud no encontrada',
+            n_afectados=n_eventos
+        ))
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Validar profundidades
+    # ─────────────────────────────────────────────────────────────────────────
+    if columna_prof in df.columns:
+        prof_validas = validar_profundidad_array(df[columna_prof].values)
+        pct_prof = 100 * np.sum(prof_validas) / n_eventos
+        n_prof_invalidas = n_eventos - np.sum(prof_validas)
+        
+        if n_prof_invalidas > 0:
+            problemas.append(ProblemaValidacion(
+                'advertencia' if pct_prof > 90 else 'error',
+                f'{n_prof_invalidas} eventos con profundidad inválida',
+                columna=columna_prof,
+                n_afectados=n_prof_invalidas
+            ))
+        
+        estadisticas['prof_min'] = float(df[columna_prof].min())
+        estadisticas['prof_max'] = float(df[columna_prof].max())
+        estadisticas['prof_media'] = float(df[columna_prof].mean())
+    else:
+        pct_prof = 0.0
+        problemas.append(ProblemaValidacion(
+            'advertencia',
+            'Columna de profundidad no encontrada',
+            n_afectados=n_eventos
+        ))
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Validar fechas
+    # ─────────────────────────────────────────────────────────────────────────
+    if columna_fecha in df.columns:
+        fechas_validas = validar_fechas_array(df[columna_fecha])
+        pct_fechas = 100 * np.sum(fechas_validas) / n_eventos
+        n_fechas_invalidas = n_eventos - np.sum(fechas_validas)
+        
+        if n_fechas_invalidas > 0:
+            problemas.append(ProblemaValidacion(
+                'advertencia' if pct_fechas > 95 else 'error',
+                f'{n_fechas_invalidas} eventos con fecha inválida',
+                columna=columna_fecha,
+                n_afectados=n_fechas_invalidas
+            ))
+        
+        fechas_dt = pd.to_datetime(df[columna_fecha], errors='coerce')
+        estadisticas['fecha_min'] = str(fechas_dt.min())
+        estadisticas['fecha_max'] = str(fechas_dt.max())
+    else:
+        pct_fechas = 0.0
+        problemas.append(ProblemaValidacion(
+            'error',
+            'Columna de fecha no encontrada',
+            n_afectados=n_eventos
+        ))
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Detectar duplicados
+    # ─────────────────────────────────────────────────────────────────────────
+    if detectar_dups and columna_lat in df.columns and columna_fecha in df.columns:
+        try:
+            n_duplicados = contar_duplicados(
+                df,
+                columna_lat=columna_lat,
+                columna_lon=columna_lon,
+                columna_fecha=columna_fecha
+            )
+            
+            if n_duplicados > 0:
+                problemas.append(ProblemaValidacion(
+                    'advertencia',
+                    f'{n_duplicados} posibles eventos duplicados',
+                    n_afectados=n_duplicados
+                ))
+        except Exception as e:
+            n_duplicados = 0
+            logger.warning(f"Error detectando duplicados: {e}")
+    else:
+        n_duplicados = 0
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Detectar outliers
+    # ─────────────────────────────────────────────────────────────────────────
+    if detectar_outs and columna_mag in df.columns:
+        try:
+            outliers_mag = detectar_outliers_iqr(df[columna_mag].values)
+            n_outliers = np.sum(outliers_mag)
+            
+            if n_outliers > 0:
+                problemas.append(ProblemaValidacion(
+                    'info',
+                    f'{n_outliers} outliers de magnitud detectados',
+                    columna=columna_mag,
+                    n_afectados=n_outliers
+                ))
+        except Exception:
+            n_outliers = 0
+    else:
+        n_outliers = 0
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Calcular eventos válidos
+    # ─────────────────────────────────────────────────────────────────────────
+    try:
+        todos_validos = np.ones(n_eventos, dtype=bool)
+        
+        if columna_lat in df.columns:
+            todos_validos &= validar_coordenadas_array(
+                df[columna_lat].values, df[columna_lon].values
+            )
+        if columna_mag in df.columns:
+            todos_validos &= validar_magnitud_array(df[columna_mag].values)
+        if columna_fecha in df.columns:
+            todos_validos &= validar_fechas_array(df[columna_fecha])
+        
+        n_validos = np.sum(todos_validos)
+    except Exception:
+        n_validos = 0
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # Crear reporte
+    # ─────────────────────────────────────────────────────────────────────────
+    return ReporteCalidad(
+        n_eventos=n_eventos,
+        n_validos=n_validos,
+        pct_coordenadas_validas=pct_coord,
+        pct_magnitudes_validas=pct_mag,
+        pct_profundidades_validas=pct_prof,
+        pct_fechas_validas=pct_fechas,
+        n_duplicados=n_duplicados,
+        n_outliers=n_outliers,
+        problemas=problemas,
+        estadisticas=estadisticas
+    )
+
+
+# Alias para compatibilidad
+reportar_calidad = validar_catalogo_completo
+
+
+# =============================================================================
+# FUNCIONES DE LIMPIEZA
 # =============================================================================
 
 def limpiar_catalogo(
     df: pd.DataFrame,
-    eliminar_invalidos: bool = True,
-    eliminar_duplicados: bool = True,
-    eliminar_outliers: bool = False,
-    lat_col: str = 'latitud',
-    lon_col: str = 'longitud',
-    mag_col: str = 'magnitud',
-    prof_col: str = 'profundidad_km',
-    fecha_col: str = 'fecha'
-) -> Tuple[pd.DataFrame, Dict[str, int]]:
+    remover_nulos: bool = True,
+    remover_duplicados: bool = False,
+    remover_outliers: bool = False,
+    columnas_requeridas: Optional[List[str]] = None
+) -> pd.DataFrame:
     """
-    Limpia un catálogo sísmico removiendo registros problemáticos.
+    Limpia un catálogo sísmico removiendo filas problemáticas.
     
     Args:
         df: DataFrame a limpiar
-        eliminar_invalidos: Remover registros con valores inválidos
-        eliminar_duplicados: Remover eventos duplicados
-        eliminar_outliers: Remover outliers estadísticos
-        lat_col, lon_col, mag_col, prof_col, fecha_col: Nombres de columnas
+        remover_nulos: Remover filas con valores nulos en columnas clave
+        remover_duplicados: Remover duplicados espaciotemporales
+        remover_outliers: Remover outliers de magnitud
+        columnas_requeridas: Columnas que deben tener valores
         
     Returns:
-        Tupla (DataFrame limpio, diccionario con conteos de eliminados)
-        
-    Example:
-        >>> catalogo_limpio, stats = limpiar_catalogo(catalogo)
-        >>> print(f"Eliminados: {sum(stats.values())}")
+        DataFrame limpio
     """
     df_limpio = df.copy()
-    eliminados = {}
+    n_original = len(df_limpio)
     
-    n_inicial = len(df_limpio)
-    
-    # Eliminar registros con coordenadas inválidas
-    if eliminar_invalidos:
-        if lat_col in df_limpio.columns and lon_col in df_limpio.columns:
-            mask_coords = df_limpio.apply(
-                lambda row: validar_coordenadas(row[lat_col], row[lon_col]),
-                axis=1
-            )
-            n_eliminados = (~mask_coords).sum()
-            if n_eliminados > 0:
-                df_limpio = df_limpio[mask_coords]
-                eliminados['coordenadas_invalidas'] = n_eliminados
+    # Remover nulos en columnas requeridas
+    if remover_nulos:
+        if columnas_requeridas is None:
+            columnas_requeridas = ['latitud', 'longitud', 'magnitud', 'fecha']
         
-        # Eliminar registros con magnitudes inválidas
-        if mag_col in df_limpio.columns:
-            mask_mag = df_limpio[mag_col].apply(validar_magnitud)
-            n_eliminados = (~mask_mag).sum()
-            if n_eliminados > 0:
-                df_limpio = df_limpio[mask_mag]
-                eliminados['magnitudes_invalidas'] = n_eliminados
-        
-        # Eliminar registros con fechas inválidas
-        if fecha_col in df_limpio.columns:
-            mask_fecha = df_limpio[fecha_col].apply(validar_fecha)
-            n_eliminados = (~mask_fecha).sum()
-            if n_eliminados > 0:
-                df_limpio = df_limpio[mask_fecha]
-                eliminados['fechas_invalidas'] = n_eliminados
+        cols_existentes = [c for c in columnas_requeridas if c in df_limpio.columns]
+        if cols_existentes:
+            df_limpio = df_limpio.dropna(subset=cols_existentes)
     
-    # Eliminar duplicados
-    if eliminar_duplicados:
-        cols_duplicados = [c for c in [fecha_col, lat_col, lon_col] if c in df_limpio.columns]
-        if cols_duplicados:
-            n_antes = len(df_limpio)
-            df_limpio = df_limpio.drop_duplicates(subset=cols_duplicados, keep='first')
-            n_eliminados = n_antes - len(df_limpio)
-            if n_eliminados > 0:
-                eliminados['duplicados'] = n_eliminados
+    # Remover duplicados
+    if remover_duplicados:
+        duplicados = detectar_duplicados(df_limpio)
+        df_limpio = df_limpio[~duplicados]
     
-    # Eliminar outliers
-    if eliminar_outliers:
-        cols_outliers = [c for c in [mag_col, prof_col] if c in df_limpio.columns]
-        if cols_outliers:
-            outliers_mask = detectar_outliers(df_limpio, cols_outliers)
-            cualquier_outlier = outliers_mask.any(axis=1)
-            n_eliminados = cualquier_outlier.sum()
-            if n_eliminados > 0:
-                df_limpio = df_limpio[~cualquier_outlier]
-                eliminados['outliers'] = n_eliminados
+    # Remover outliers
+    if remover_outliers and 'magnitud' in df_limpio.columns:
+        outliers = detectar_outliers_iqr(df_limpio['magnitud'].values, factor=3.0)
+        df_limpio = df_limpio[~outliers]
     
-    # Reset index
-    df_limpio = df_limpio.reset_index(drop=True)
+    n_final = len(df_limpio)
+    logger.info(f"Limpieza: {n_original} → {n_final} eventos ({n_original - n_final} removidos)")
     
-    logger.info(f"Limpieza: {n_inicial} -> {len(df_limpio)} eventos "
-                f"({sum(eliminados.values())} eliminados)")
-    
-    return df_limpio, eliminados
-
-
-# =============================================================================
-# FUNCIONES DE CONVENIENCIA
-# =============================================================================
-
-def reportar_calidad(
-    df: pd.DataFrame,
-    imprimir: bool = True
-) -> ReporteCalidad:
-    """
-    Genera y opcionalmente imprime un reporte de calidad.
-    
-    Args:
-        df: DataFrame a analizar
-        imprimir: Si True, imprime el reporte
-        
-    Returns:
-        ReporteCalidad
-    """
-    reporte = validar_catalogo_completo(df)
-    
-    if imprimir:
-        print(reporte)
-    
-    return reporte
-
-
-def validacion_rapida(df: pd.DataFrame) -> float:
-    """
-    Realiza una validación rápida y retorna un score (0-100).
-    
-    Args:
-        df: DataFrame a validar
-        
-    Returns:
-        Score de calidad (0-100)
-    """
-    reporte = validar_catalogo_completo(df)
-    return reporte.score
+    return df_limpio.reset_index(drop=True)
 
 
 # =============================================================================
@@ -714,7 +876,7 @@ def validacion_rapida(df: pd.DataFrame) -> float:
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("SEISMEX - Validadores de Datos")
+    print("SEISMEX Utils - Ejemplos de uso de validators.py")
     print("=" * 60)
     
     # Crear datos de ejemplo con algunos problemas
@@ -722,51 +884,37 @@ if __name__ == '__main__':
     n = 100
     
     datos = pd.DataFrame({
-        'fecha': pd.date_range('2024-01-01', periods=n, freq='D'),
+        'fecha': pd.date_range('2024-01-01', periods=n, freq='12h'),
         'latitud': np.concatenate([
             np.random.uniform(18.5, 20.5, n-5),
-            [100, -95, np.nan, 19.5, 19.5]  # Algunos inválidos
+            [np.nan, 200, -95, 19.5, 19.5]  # Algunos inválidos
         ]),
         'longitud': np.concatenate([
             np.random.uniform(-104.5, -103.0, n-5),
-            [-103.5, 200, -103.5, -103.5, -103.5]
+            [-103.5, -103.5, -103.5, np.nan, -103.5]
         ]),
         'profundidad_km': np.concatenate([
-            np.random.uniform(10, 50, n-3),
-            [-10, 800, np.nan]  # Algunos problemáticos
+            np.random.exponential(30, n-3),
+            [-10, 800, np.nan]  # Algunos inválidos
         ]),
         'magnitud': np.concatenate([
-            np.random.uniform(3.0, 5.5, n-2),
-            [12.0, -5.0]  # Outliers
-        ]),
+            np.random.exponential(1.5, n-2) + 2.0,
+            [15, -5]  # Outliers
+        ])
     })
     
-    # Agregar duplicado
-    datos.iloc[-1, :] = datos.iloc[-2, :]
+    print("\n--- Validación individual ---")
+    print(f"validar_coordenadas(19.2, -103.7): {validar_coordenadas(19.2, -103.7)}")
+    print(f"validar_coordenadas(200, -103.7): {validar_coordenadas(200, -103.7)}")
+    print(f"validar_magnitud(4.5): {validar_magnitud(4.5)}")
+    print(f"validar_magnitud(15): {validar_magnitud(15)}")
     
-    print(f"\nDatos de ejemplo: {len(datos)} eventos")
-    
-    # Validación completa
-    print("\n--- Validación Completa ---")
-    reporte = validar_catalogo_completo(datos)
+    print("\n--- Reporte de calidad ---")
+    reporte = validar_catalogo_completo(datos, region='mexico')
     print(reporte)
     
-    # Detección de outliers
-    print("\n--- Detección de Outliers ---")
-    outliers = detectar_outliers(datos, ['magnitud', 'profundidad_km'])
-    print(f"Outliers en magnitud: {outliers['magnitud'].sum()}")
-    print(f"Outliers en profundidad: {outliers['profundidad_km'].sum()}")
+    print("\n--- Limpieza ---")
+    datos_limpio = limpiar_catalogo(datos, remover_nulos=True, remover_outliers=True)
+    print(f"Eventos después de limpieza: {len(datos_limpio)}")
     
-    # Limpieza
-    print("\n--- Limpieza del Catálogo ---")
-    datos_limpios, stats = limpiar_catalogo(datos, eliminar_outliers=True)
-    print(f"Eventos originales: {len(datos)}")
-    print(f"Eventos limpios: {len(datos_limpios)}")
-    print(f"Eliminados: {stats}")
-    
-    # Validación rápida
-    print("\n--- Validación Rápida ---")
-    score = validacion_rapida(datos_limpios)
-    print(f"Score de calidad: {score:.1f}/100")
-    
-    print("\n✓ Todas las funciones de validación funcionan correctamente")
+    print("\n✓ Todos los ejemplos ejecutados correctamente")

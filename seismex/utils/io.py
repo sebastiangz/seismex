@@ -4,14 +4,12 @@ SEISMEX Utils - Entrada y Salida
 
 Funciones para lectura/escritura de archivos y formatos especializados.
 
-Formatos soportados:
-- CSV con diferentes dialectos (SSN, USGS, ISC)
-- Excel (.xlsx, .xls)
-- GeoJSON
-- GeoTIFF
-- KML/KMZ
-- Shapefile
-- Pickle (para caché)
+Incluye:
+- Lectura de catálogos sísmicos (SSN, ISC, USGS)
+- Exportación a formatos GIS (GeoJSON, GeoTIFF, KML)
+- Serialización (pickle, JSON)
+- Compresión de archivos
+- Utilidades de archivos
 
 Ejemplo de uso:
     >>> from seismex.utils.io import leer_catalogo_ssn, exportar_geojson
@@ -25,20 +23,75 @@ Licencia: MIT
 from __future__ import annotations
 
 import json
-import gzip
 import pickle
+import gzip
+import zipfile
+import shutil
 import logging
 import warnings
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Optional, Union, Any, Tuple
-from zipfile import ZipFile
-import shutil
+from typing import (
+    Optional, List, Dict, Any, Union, Tuple, 
+    TYPE_CHECKING, BinaryIO, TextIO
+)
 
 import numpy as np
 import pandas as pd
 
+if TYPE_CHECKING:
+    import geopandas as gpd
+    import rasterio
+
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# CONSTANTES
+# =============================================================================
+
+# Mapeos de columnas por formato
+MAPEO_SSN = {
+    'Fecha': 'fecha',
+    'Hora': 'hora',
+    'Magnitud': 'magnitud',
+    'Latitud': 'latitud',
+    'Longitud': 'longitud',
+    'Profundidad': 'profundidad_km',
+    'Referencia de localizacion': 'lugar',
+    'Fecha UTC': 'fecha_utc',
+}
+
+MAPEO_USGS = {
+    'time': 'fecha',
+    'latitude': 'latitud',
+    'longitude': 'longitud',
+    'depth': 'profundidad_km',
+    'mag': 'magnitud',
+    'magType': 'tipo_magnitud',
+    'place': 'lugar',
+    'id': 'id_evento',
+}
+
+MAPEO_ISC = {
+    'date': 'fecha',
+    'time': 'hora',
+    'lat': 'latitud',
+    'lon': 'longitud',
+    'depth': 'profundidad_km',
+    'mag': 'magnitud',
+    'magtype': 'tipo_magnitud',
+    'author': 'fuente',
+}
+
+MAPEO_IRIS = {
+    'Time': 'fecha',
+    'Latitude': 'latitud',
+    'Longitude': 'longitud',
+    'Depth/km': 'profundidad_km',
+    'Magnitude': 'magnitud',
+    'MagType': 'tipo_magnitud',
+    'EventLocationName': 'lugar',
+}
 
 
 # =============================================================================
@@ -48,24 +101,28 @@ logger = logging.getLogger(__name__)
 def leer_catalogo_ssn(
     ruta: Union[str, Path],
     encoding: str = 'utf-8',
+    combinar_fecha_hora: bool = True,
     **kwargs
 ) -> pd.DataFrame:
     """
-    Lee un catálogo del SSN (Servicio Sismológico Nacional de México).
+    Lee un catálogo del Servicio Sismológico Nacional de México.
     
-    El SSN usa un formato CSV con columnas específicas en español.
+    El SSN exporta sus datos en formato CSV con columnas específicas
+    que esta función normaliza al formato estándar de SEISMEX.
     
     Args:
-        ruta: Ruta al archivo CSV
-        encoding: Codificación del archivo (default: utf-8)
+        ruta: Ruta al archivo CSV del SSN
+        encoding: Codificación del archivo
+        combinar_fecha_hora: Si True, combina columnas Fecha y Hora
         **kwargs: Argumentos adicionales para pd.read_csv
         
     Returns:
-        DataFrame con columnas normalizadas
+        DataFrame normalizado con columnas estándar
         
     Example:
-        >>> catalogo = leer_catalogo_ssn('ssn_2024.csv')
-        >>> print(catalogo.columns)
+        >>> df = leer_catalogo_ssn('ssn_2024.csv')
+        >>> print(df.columns.tolist())
+        ['fecha', 'latitud', 'longitud', 'profundidad_km', 'magnitud', ...]
     """
     ruta = Path(ruta)
     if not ruta.exists():
@@ -73,39 +130,35 @@ def leer_catalogo_ssn(
     
     logger.info(f"Leyendo catálogo SSN: {ruta}")
     
-    # Mapeo de columnas SSN a estándar
-    mapeo = {
-        'Fecha': 'fecha',
-        'Fecha UTC': 'fecha',
-        'Latitud': 'latitud',
-        'Longitud': 'longitud',
-        'Profundidad': 'profundidad_km',
-        'Magnitud': 'magnitud',
-        'Referencia de localizacion': 'lugar',
-        'Referencia de localización': 'lugar',
-    }
-    
     # Leer CSV
     df = pd.read_csv(ruta, encoding=encoding, **kwargs)
     
-    # Normalizar nombres de columnas
-    df.columns = df.columns.str.strip()
-    df = df.rename(columns=mapeo)
+    # Renombrar columnas
+    columnas_existentes = {k: v for k, v in MAPEO_SSN.items() if k in df.columns}
+    df = df.rename(columns=columnas_existentes)
     
-    # Convertir fecha
-    if 'fecha' in df.columns:
-        df['fecha'] = pd.to_datetime(df['fecha'], errors='coerce')
+    # Combinar fecha y hora si existen separadas
+    if combinar_fecha_hora and 'hora' in df.columns and 'fecha' in df.columns:
+        try:
+            df['fecha'] = pd.to_datetime(
+                df['fecha'].astype(str) + ' ' + df['hora'].astype(str),
+                format='%Y-%m-%d %H:%M:%S',
+                errors='coerce'
+            )
+            df = df.drop(columns=['hora'])
+        except Exception as e:
+            logger.warning(f"No se pudo combinar fecha/hora: {e}")
     
-    # Asegurar tipos numéricos
+    # Asegurar tipos
+    df['fecha'] = pd.to_datetime(df['fecha'], errors='coerce')
     for col in ['latitud', 'longitud', 'profundidad_km', 'magnitud']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
     
-    # Agregar fuente
+    # Agregar metadatos
     df['fuente'] = 'SSN'
     
-    logger.info(f"Catálogo SSN cargado: {len(df)} eventos")
-    
+    logger.info(f"Leídos {len(df)} eventos del SSN")
     return df
 
 
@@ -114,240 +167,284 @@ def leer_catalogo_usgs(
     **kwargs
 ) -> pd.DataFrame:
     """
-    Lee un catálogo del USGS (United States Geological Survey).
+    Lee un catálogo del USGS (formato CSV de earthquake.usgs.gov).
     
     Args:
         ruta: Ruta al archivo CSV
         **kwargs: Argumentos adicionales para pd.read_csv
         
     Returns:
-        DataFrame con columnas normalizadas
+        DataFrame normalizado
     """
     ruta = Path(ruta)
-    
     logger.info(f"Leyendo catálogo USGS: {ruta}")
     
-    mapeo = {
-        'time': 'fecha',
-        'latitude': 'latitud',
-        'longitude': 'longitud',
-        'depth': 'profundidad_km',
-        'mag': 'magnitud',
-        'magType': 'tipo_magnitud',
-        'place': 'lugar',
-        'id': 'id_evento',
-        'horizontalError': 'incertidumbre_h',
-        'depthError': 'incertidumbre_z',
-        'magError': 'incertidumbre_m',
-        'rms': 'rms',
-        'gap': 'gap',
-        'nst': 'nst',
-    }
-    
     df = pd.read_csv(ruta, **kwargs)
-    df = df.rename(columns=mapeo)
     
+    # Renombrar columnas
+    columnas_existentes = {k: v for k, v in MAPEO_USGS.items() if k in df.columns}
+    df = df.rename(columns=columnas_existentes)
+    
+    # Convertir fecha ISO8601
     if 'fecha' in df.columns:
-        df['fecha'] = pd.to_datetime(df['fecha'], errors='coerce')
+        df['fecha'] = pd.to_datetime(df['fecha'], utc=True, errors='coerce')
     
     df['fuente'] = 'USGS'
     
-    logger.info(f"Catálogo USGS cargado: {len(df)} eventos")
-    
+    logger.info(f"Leídos {len(df)} eventos del USGS")
     return df
 
 
 def leer_catalogo_isc(
     ruta: Union[str, Path],
-    formato: str = 'isf',
+    formato: str = 'csv',
     **kwargs
 ) -> pd.DataFrame:
     """
     Lee un catálogo del ISC (International Seismological Centre).
     
+    Soporta formato CSV e ISF (IASPEI Seismic Format).
+    
     Args:
         ruta: Ruta al archivo
-        formato: 'isf' o 'csv'
+        formato: 'csv' o 'isf'
         **kwargs: Argumentos adicionales
         
     Returns:
-        DataFrame con columnas normalizadas
+        DataFrame normalizado
     """
     ruta = Path(ruta)
+    logger.info(f"Leyendo catálogo ISC: {ruta}")
     
-    logger.info(f"Leyendo catálogo ISC ({formato}): {ruta}")
-    
-    if formato == 'csv':
-        mapeo = {
-            'DATE': 'fecha',
-            'LAT': 'latitud',
-            'LON': 'longitud',
-            'DEPTH': 'profundidad_km',
-            'MAG': 'magnitud',
-            'REGION': 'lugar',
-        }
-        
-        df = pd.read_csv(ruta, **kwargs)
-        df = df.rename(columns=mapeo)
-    
-    elif formato == 'isf':
-        # Formato ISF es más complejo - parseo básico
-        eventos = []
-        with open(ruta, 'r') as f:
-            for linea in f:
-                if linea.startswith('Date'):
-                    continue
-                partes = linea.split()
-                if len(partes) >= 6:
-                    try:
-                        evento = {
-                            'fecha': f"{partes[0]} {partes[1]}",
-                            'latitud': float(partes[2]),
-                            'longitud': float(partes[3]),
-                            'profundidad_km': float(partes[4]),
-                            'magnitud': float(partes[5]),
-                        }
-                        eventos.append(evento)
-                    except (ValueError, IndexError):
-                        continue
-        
-        df = pd.DataFrame(eventos)
+    if formato.lower() == 'isf':
+        df = _leer_isf(ruta)
     else:
-        raise ValueError(f"Formato no soportado: {formato}")
+        df = pd.read_csv(ruta, **kwargs)
+        columnas_existentes = {k: v for k, v in MAPEO_ISC.items() if k in df.columns}
+        df = df.rename(columns=columnas_existentes)
     
-    if 'fecha' in df.columns:
-        df['fecha'] = pd.to_datetime(df['fecha'], errors='coerce')
+    # Combinar fecha y hora si están separadas
+    if 'hora' in df.columns and 'fecha' in df.columns:
+        try:
+            df['fecha'] = pd.to_datetime(
+                df['fecha'].astype(str) + ' ' + df['hora'].astype(str),
+                errors='coerce'
+            )
+            df = df.drop(columns=['hora'])
+        except Exception:
+            pass
     
     df['fuente'] = 'ISC'
     
-    logger.info(f"Catálogo ISC cargado: {len(df)} eventos")
+    logger.info(f"Leídos {len(df)} eventos del ISC")
+    return df
+
+
+def _leer_isf(ruta: Path) -> pd.DataFrame:
+    """
+    Parser simplificado para formato ISF.
+    
+    El formato ISF es complejo; esta implementación extrae
+    solo los campos principales de eventos.
+    """
+    eventos = []
+    evento_actual = {}
+    
+    with open(ruta, 'r') as f:
+        for linea in f:
+            linea = linea.strip()
+            
+            if linea.startswith('Event'):
+                if evento_actual:
+                    eventos.append(evento_actual)
+                evento_actual = {}
+                
+            elif linea.startswith('Date') and 'Time' in linea:
+                # Línea de encabezado, ignorar
+                continue
+                
+            elif len(linea) >= 50 and linea[0:4].isdigit():
+                # Posible línea de datos
+                try:
+                    evento_actual['fecha'] = linea[0:10].strip()
+                    evento_actual['hora'] = linea[11:22].strip()
+                    evento_actual['latitud'] = float(linea[36:44].strip())
+                    evento_actual['longitud'] = float(linea[45:54].strip())
+                except (ValueError, IndexError):
+                    continue
+    
+    # Agregar último evento
+    if evento_actual:
+        eventos.append(evento_actual)
+    
+    return pd.DataFrame(eventos)
+
+
+def leer_catalogo_generico(
+    ruta: Union[str, Path],
+    mapeo_columnas: Optional[Dict[str, str]] = None,
+    **kwargs
+) -> pd.DataFrame:
+    """
+    Lee un catálogo con formato genérico.
+    
+    Intenta detectar el formato automáticamente o usa el mapeo proporcionado.
+    
+    Args:
+        ruta: Ruta al archivo (CSV, Excel, JSON)
+        mapeo_columnas: Diccionario de mapeo de columnas
+        **kwargs: Argumentos adicionales
+        
+    Returns:
+        DataFrame normalizado
+    """
+    ruta = Path(ruta)
+    ext = ruta.suffix.lower()
+    
+    if ext in ['.xlsx', '.xls']:
+        df = pd.read_excel(ruta, **kwargs)
+    elif ext == '.json':
+        df = pd.read_json(ruta, **kwargs)
+    else:
+        df = pd.read_csv(ruta, **kwargs)
+    
+    if mapeo_columnas:
+        columnas_existentes = {k: v for k, v in mapeo_columnas.items() if k in df.columns}
+        df = df.rename(columns=columnas_existentes)
     
     return df
 
 
+def detectar_formato_catalogo(ruta: Union[str, Path]) -> str:
+    """
+    Detecta el formato de un archivo de catálogo.
+    
+    Args:
+        ruta: Ruta al archivo
+        
+    Returns:
+        Formato detectado: 'ssn', 'usgs', 'isc', 'iris', o 'unknown'
+    """
+    ruta = Path(ruta)
+    
+    try:
+        # Leer primeras líneas
+        with open(ruta, 'r', encoding='utf-8') as f:
+            header = f.readline().lower()
+        
+        if 'referencia de localizacion' in header or 'fecha utc' in header:
+            return 'ssn'
+        elif 'time' in header and 'magtype' in header:
+            return 'usgs'
+        elif 'magtype' in header.lower() and 'depth/km' in header.lower():
+            return 'iris'
+        elif 'author' in header and ('lat' in header or 'latitude' in header):
+            return 'isc'
+        else:
+            return 'unknown'
+    except Exception:
+        return 'unknown'
+
+
 # =============================================================================
-# EXPORTACIÓN A FORMATOS GIS
+# EXPORTACIÓN GIS
 # =============================================================================
 
 def exportar_geojson(
-    datos: Union[pd.DataFrame, List[Dict]],
-    archivo_salida: Union[str, Path],
+    datos: pd.DataFrame,
+    ruta_salida: Union[str, Path],
     propiedades: Optional[List[str]] = None,
-    lat_col: str = 'latitud',
-    lon_col: str = 'longitud',
+    columna_lat: str = 'latitud',
+    columna_lon: str = 'longitud',
     precision: int = 6
-) -> Path:
+) -> None:
     """
-    Exporta datos a formato GeoJSON.
+    Exporta un DataFrame a formato GeoJSON.
     
     Args:
-        datos: DataFrame o lista de diccionarios con los datos
-        archivo_salida: Ruta del archivo de salida
+        datos: DataFrame con coordenadas
+        ruta_salida: Ruta de salida (.geojson)
         propiedades: Lista de columnas a incluir como propiedades
-        lat_col: Nombre de la columna de latitud
-        lon_col: Nombre de la columna de longitud
+        columna_lat: Nombre de la columna de latitud
+        columna_lon: Nombre de la columna de longitud
         precision: Decimales para coordenadas
-        
-    Returns:
-        Path del archivo creado
         
     Example:
         >>> exportar_geojson(catalogo, 'sismos.geojson', 
-        ...                  propiedades=['fecha', 'magnitud'])
+        ...                  propiedades=['fecha', 'magnitud', 'profundidad_km'])
     """
-    archivo_salida = Path(archivo_salida)
+    ruta_salida = Path(ruta_salida)
     
-    # Convertir a DataFrame si es necesario
-    if isinstance(datos, list):
-        df = pd.DataFrame(datos)
-    else:
-        df = datos.copy()
-    
-    # Determinar propiedades
     if propiedades is None:
-        propiedades = [c for c in df.columns if c not in [lat_col, lon_col]]
+        propiedades = [col for col in datos.columns 
+                       if col not in [columna_lat, columna_lon]]
     
-    # Crear features
     features = []
-    for _, row in df.iterrows():
-        try:
-            lat = round(float(row[lat_col]), precision)
-            lon = round(float(row[lon_col]), precision)
-        except (ValueError, TypeError):
+    for idx, row in datos.iterrows():
+        # Obtener coordenadas
+        lat = row.get(columna_lat)
+        lon = row.get(columna_lon)
+        
+        if pd.isna(lat) or pd.isna(lon):
             continue
         
+        # Crear propiedades
         props = {}
         for prop in propiedades:
             if prop in row:
                 valor = row[prop]
                 # Convertir tipos no serializables
-                if pd.isna(valor):
-                    props[prop] = None
-                elif isinstance(valor, (np.integer, np.floating)):
-                    props[prop] = float(valor)
-                elif isinstance(valor, pd.Timestamp):
-                    props[prop] = valor.isoformat()
-                elif isinstance(valor, datetime):
-                    props[prop] = valor.isoformat()
-                else:
-                    props[prop] = valor
+                if isinstance(valor, (pd.Timestamp, datetime)):
+                    valor = valor.isoformat()
+                elif pd.isna(valor):
+                    valor = None
+                elif isinstance(valor, np.integer):
+                    valor = int(valor)
+                elif isinstance(valor, np.floating):
+                    valor = float(valor)
+                props[prop] = valor
         
         feature = {
             'type': 'Feature',
             'geometry': {
                 'type': 'Point',
-                'coordinates': [lon, lat]
+                'coordinates': [round(lon, precision), round(lat, precision)]
             },
             'properties': props
         }
         features.append(feature)
     
-    # Crear GeoJSON
     geojson = {
         'type': 'FeatureCollection',
-        'features': features,
-        'metadata': {
-            'created': datetime.now().isoformat(),
-            'total_features': len(features),
-            'source': 'SEISMEX'
-        }
+        'features': features
     }
     
-    # Escribir archivo
-    archivo_salida.parent.mkdir(parents=True, exist_ok=True)
-    with open(archivo_salida, 'w', encoding='utf-8') as f:
-        json.dump(geojson, f, indent=2, ensure_ascii=False)
+    with open(ruta_salida, 'w', encoding='utf-8') as f:
+        json.dump(geojson, f, ensure_ascii=False, indent=2)
     
-    logger.info(f"GeoJSON exportado: {archivo_salida} ({len(features)} features)")
-    
-    return archivo_salida
+    logger.info(f"Exportado GeoJSON con {len(features)} features: {ruta_salida}")
 
 
 def exportar_geotiff(
-    grilla_x: np.ndarray,
-    grilla_y: np.ndarray,
-    valores: np.ndarray,
-    archivo_salida: Union[str, Path],
+    datos: np.ndarray,
+    ruta_salida: Union[str, Path],
+    bounds: Tuple[float, float, float, float],
     crs: str = 'EPSG:4326',
-    nodata: float = -999.0,
+    nodata: float = -9999.0,
     descripcion: str = ''
-) -> Path:
+) -> None:
     """
-    Exporta una grilla de valores a formato GeoTIFF.
+    Exporta una matriz 2D a formato GeoTIFF.
     
     Requiere rasterio instalado.
     
     Args:
-        grilla_x: Array 1D o 2D de coordenadas X (longitud)
-        grilla_y: Array 1D o 2D de coordenadas Y (latitud)
-        valores: Array 2D de valores
-        archivo_salida: Ruta del archivo de salida
-        crs: Sistema de referencia de coordenadas
+        datos: Matriz 2D de valores
+        ruta_salida: Ruta de salida (.tif)
+        bounds: Límites (lon_min, lat_min, lon_max, lat_max)
+        crs: Sistema de coordenadas
         nodata: Valor para datos faltantes
         descripcion: Descripción del raster
-        
-    Returns:
-        Path del archivo creado
     """
     try:
         import rasterio
@@ -355,227 +452,134 @@ def exportar_geotiff(
     except ImportError:
         raise ImportError("rasterio requerido: pip install rasterio")
     
-    archivo_salida = Path(archivo_salida)
-    
-    # Determinar bounds
-    if grilla_x.ndim == 1:
-        x_min, x_max = grilla_x.min(), grilla_x.max()
-        y_min, y_max = grilla_y.min(), grilla_y.max()
-    else:
-        x_min, x_max = grilla_x.min(), grilla_x.max()
-        y_min, y_max = grilla_y.min(), grilla_y.max()
+    ruta_salida = Path(ruta_salida)
     
     # Dimensiones
-    height, width = valores.shape
+    height, width = datos.shape
+    lon_min, lat_min, lon_max, lat_max = bounds
     
-    # Transformación
-    transform = from_bounds(x_min, y_min, x_max, y_max, width, height)
+    # Transformación afín
+    transform = from_bounds(lon_min, lat_min, lon_max, lat_max, width, height)
     
-    # Reemplazar NaN con nodata
-    valores_out = np.where(np.isnan(valores), nodata, valores)
-    
-    # Escribir GeoTIFF
-    archivo_salida.parent.mkdir(parents=True, exist_ok=True)
+    # Escribir archivo
     with rasterio.open(
-        archivo_salida,
+        ruta_salida,
         'w',
         driver='GTiff',
         height=height,
         width=width,
         count=1,
-        dtype=valores_out.dtype,
+        dtype=datos.dtype,
         crs=crs,
         transform=transform,
-        nodata=nodata
+        nodata=nodata,
+        compress='lzw'
     ) as dst:
-        dst.write(valores_out, 1)
-        dst.update_tags(description=descripcion, source='SEISMEX')
+        dst.write(datos, 1)
+        if descripcion:
+            dst.update_tags(1, DESCRIPTION=descripcion)
     
-    logger.info(f"GeoTIFF exportado: {archivo_salida} ({width}x{height})")
-    
-    return archivo_salida
+    logger.info(f"Exportado GeoTIFF {height}x{width}: {ruta_salida}")
 
 
 def exportar_kml(
-    datos: Union[pd.DataFrame, List[Dict]],
-    archivo_salida: Union[str, Path],
-    nombre: str = 'SEISMEX Data',
-    descripcion: str = '',
-    lat_col: str = 'latitud',
-    lon_col: str = 'longitud',
-    nombre_col: Optional[str] = None,
-    color: str = 'ff0000ff'  # AABBGGRR format
-) -> Path:
+    datos: pd.DataFrame,
+    ruta_salida: Union[str, Path],
+    columna_nombre: str = 'lugar',
+    columna_descripcion: Optional[str] = None,
+    columna_lat: str = 'latitud',
+    columna_lon: str = 'longitud',
+    columna_magnitud: Optional[str] = 'magnitud'
+) -> None:
     """
-    Exporta datos a formato KML para Google Earth.
+    Exporta un DataFrame a formato KML para Google Earth.
     
     Args:
-        datos: DataFrame o lista de diccionarios
-        archivo_salida: Ruta del archivo de salida
-        nombre: Nombre del documento KML
-        descripcion: Descripción del documento
-        lat_col, lon_col: Columnas de coordenadas
-        nombre_col: Columna para nombres de placemarks
-        color: Color en formato KML (AABBGGRR)
-        
-    Returns:
-        Path del archivo creado
+        datos: DataFrame con coordenadas
+        ruta_salida: Ruta de salida (.kml)
+        columna_nombre: Columna para nombre del marcador
+        columna_descripcion: Columna para descripción
+        columna_lat, columna_lon: Columnas de coordenadas
+        columna_magnitud: Columna para escalar íconos
     """
-    archivo_salida = Path(archivo_salida)
+    ruta_salida = Path(ruta_salida)
     
-    if isinstance(datos, list):
-        df = pd.DataFrame(datos)
-    else:
-        df = datos.copy()
-    
-    # Construir KML
-    kml_header = f'''<?xml version="1.0" encoding="UTF-8"?>
+    # Plantilla KML
+    kml_header = '''<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
 <Document>
-    <name>{nombre}</name>
-    <description>{descripcion}</description>
-    <Style id="defaultStyle">
-        <IconStyle>
-            <color>{color}</color>
-            <scale>1.0</scale>
-            <Icon>
-                <href>http://maps.google.com/mapfiles/kml/shapes/shaded_dot.png</href>
-            </Icon>
-        </IconStyle>
-    </Style>
+  <name>SEISMEX Export</name>
+  <description>Catálogo sísmico exportado por SEISMEX</description>
+  <Style id="sismo">
+    <IconStyle>
+      <Icon><href>http://maps.google.com/mapfiles/kml/shapes/earthquake.png</href></Icon>
+    </IconStyle>
+  </Style>
 '''
-    
-    placemarks = []
-    for i, row in df.iterrows():
-        try:
-            lat = float(row[lat_col])
-            lon = float(row[lon_col])
-        except (ValueError, TypeError):
-            continue
-        
-        if nombre_col and nombre_col in row:
-            pm_nombre = str(row[nombre_col])
-        else:
-            pm_nombre = f"Evento {i+1}"
-        
-        # Descripción del placemark
-        desc_parts = []
-        for col in df.columns:
-            if col not in [lat_col, lon_col]:
-                desc_parts.append(f"{col}: {row[col]}")
-        pm_desc = "<br/>".join(desc_parts)
-        
-        placemark = f'''    <Placemark>
-        <name>{pm_nombre}</name>
-        <description><![CDATA[{pm_desc}]]></description>
-        <styleUrl>#defaultStyle</styleUrl>
-        <Point>
-            <coordinates>{lon},{lat},0</coordinates>
-        </Point>
-    </Placemark>
-'''
-        placemarks.append(placemark)
     
     kml_footer = '''</Document>
 </kml>'''
     
-    kml_content = kml_header + ''.join(placemarks) + kml_footer
-    
-    # Escribir archivo
-    archivo_salida.parent.mkdir(parents=True, exist_ok=True)
-    with open(archivo_salida, 'w', encoding='utf-8') as f:
-        f.write(kml_content)
-    
-    logger.info(f"KML exportado: {archivo_salida} ({len(placemarks)} placemarks)")
-    
-    return archivo_salida
-
-
-def exportar_shapefile(
-    datos: Union[pd.DataFrame, List[Dict]],
-    archivo_salida: Union[str, Path],
-    lat_col: str = 'latitud',
-    lon_col: str = 'longitud',
-    crs: str = 'EPSG:4326'
-) -> Path:
-    """
-    Exporta datos a formato Shapefile.
-    
-    Requiere geopandas instalado.
-    
-    Args:
-        datos: DataFrame o lista de diccionarios
-        archivo_salida: Ruta del archivo de salida (sin extensión)
-        lat_col, lon_col: Columnas de coordenadas
-        crs: Sistema de referencia de coordenadas
+    placemarks = []
+    for idx, row in datos.iterrows():
+        lat = row.get(columna_lat)
+        lon = row.get(columna_lon)
         
-    Returns:
-        Path del archivo creado
-    """
-    try:
-        import geopandas as gpd
-        from shapely.geometry import Point
-    except ImportError:
-        raise ImportError("geopandas y shapely requeridos: pip install geopandas shapely")
+        if pd.isna(lat) or pd.isna(lon):
+            continue
+        
+        nombre = str(row.get(columna_nombre, f'Evento {idx}'))
+        
+        # Construir descripción
+        if columna_descripcion and columna_descripcion in row:
+            desc = str(row[columna_descripcion])
+        else:
+            desc_parts = []
+            if 'fecha' in row:
+                desc_parts.append(f"Fecha: {row['fecha']}")
+            if columna_magnitud and columna_magnitud in row:
+                desc_parts.append(f"Magnitud: {row[columna_magnitud]}")
+            if 'profundidad_km' in row:
+                desc_parts.append(f"Profundidad: {row['profundidad_km']} km")
+            desc = '<br/>'.join(desc_parts)
+        
+        placemark = f'''  <Placemark>
+    <name>{nombre}</name>
+    <description><![CDATA[{desc}]]></description>
+    <styleUrl>#sismo</styleUrl>
+    <Point>
+      <coordinates>{lon},{lat},0</coordinates>
+    </Point>
+  </Placemark>
+'''
+        placemarks.append(placemark)
     
-    archivo_salida = Path(archivo_salida)
+    with open(ruta_salida, 'w', encoding='utf-8') as f:
+        f.write(kml_header)
+        f.write('\n'.join(placemarks))
+        f.write(kml_footer)
     
-    if isinstance(datos, list):
-        df = pd.DataFrame(datos)
-    else:
-        df = datos.copy()
-    
-    # Crear geometrías
-    geometria = [
-        Point(row[lon_col], row[lat_col]) 
-        for _, row in df.iterrows()
-        if pd.notna(row[lat_col]) and pd.notna(row[lon_col])
-    ]
-    
-    # Filtrar filas con coordenadas válidas
-    df_valid = df[df[lat_col].notna() & df[lon_col].notna()].copy()
-    
-    # Crear GeoDataFrame
-    gdf = gpd.GeoDataFrame(df_valid, geometry=geometria, crs=crs)
-    
-    # Convertir columnas datetime a string (shapefile no soporta datetime)
-    for col in gdf.select_dtypes(include=['datetime64']).columns:
-        gdf[col] = gdf[col].astype(str)
-    
-    # Truncar nombres de columnas a 10 caracteres (limitación shapefile)
-    gdf.columns = [c[:10] if len(c) > 10 else c for c in gdf.columns]
-    
-    # Guardar
-    archivo_salida.parent.mkdir(parents=True, exist_ok=True)
-    gdf.to_file(str(archivo_salida))
-    
-    logger.info(f"Shapefile exportado: {archivo_salida} ({len(gdf)} features)")
-    
-    return archivo_salida
+    logger.info(f"Exportado KML con {len(placemarks)} marcadores: {ruta_salida}")
 
 
 # =============================================================================
-# CACHÉ Y PERSISTENCIA
+# SERIALIZACIÓN
 # =============================================================================
 
 def guardar_pickle(
     objeto: Any,
     ruta: Union[str, Path],
     comprimir: bool = True
-) -> Path:
+) -> None:
     """
     Guarda un objeto en formato pickle (opcionalmente comprimido).
     
     Args:
         objeto: Cualquier objeto serializable
-        ruta: Ruta del archivo de salida
-        comprimir: Si True, comprime con gzip
-        
-    Returns:
-        Path del archivo creado
+        ruta: Ruta de salida
+        comprimir: Si True, usa compresión gzip
     """
     ruta = Path(ruta)
-    ruta.parent.mkdir(parents=True, exist_ok=True)
     
     if comprimir:
         if not ruta.suffix == '.gz':
@@ -586,113 +590,208 @@ def guardar_pickle(
         with open(ruta, 'wb') as f:
             pickle.dump(objeto, f, protocol=pickle.HIGHEST_PROTOCOL)
     
-    logger.debug(f"Objeto guardado: {ruta}")
-    
-    return ruta
+    logger.info(f"Guardado pickle: {ruta}")
 
 
 def cargar_pickle(ruta: Union[str, Path]) -> Any:
     """
     Carga un objeto desde archivo pickle.
     
+    Detecta automáticamente si está comprimido.
+    
     Args:
-        ruta: Ruta del archivo
+        ruta: Ruta al archivo
         
     Returns:
         Objeto deserializado
     """
     ruta = Path(ruta)
     
-    if not ruta.exists():
-        raise FileNotFoundError(f"Archivo no encontrado: {ruta}")
-    
-    if ruta.suffix == '.gz':
+    # Detectar si está comprimido
+    try:
         with gzip.open(ruta, 'rb') as f:
             return pickle.load(f)
-    else:
+    except gzip.BadGzipFile:
         with open(ruta, 'rb') as f:
             return pickle.load(f)
 
 
+def guardar_json(
+    datos: Union[Dict, List],
+    ruta: Union[str, Path],
+    indent: int = 2,
+    ensure_ascii: bool = False
+) -> None:
+    """
+    Guarda datos en formato JSON.
+    
+    Maneja tipos numpy y datetime automáticamente.
+    """
+    ruta = Path(ruta)
+    
+    def convertir(obj):
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        elif isinstance(obj, (np.floating,)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, (datetime, pd.Timestamp)):
+            return obj.isoformat()
+        elif pd.isna(obj):
+            return None
+        raise TypeError(f"No se puede serializar {type(obj)}")
+    
+    with open(ruta, 'w', encoding='utf-8') as f:
+        json.dump(datos, f, indent=indent, ensure_ascii=ensure_ascii, default=convertir)
+
+
+def cargar_json(ruta: Union[str, Path]) -> Union[Dict, List]:
+    """
+    Carga datos desde archivo JSON.
+    """
+    with open(ruta, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
 # =============================================================================
-# COMPRESIÓN Y ARCHIVOS
+# COMPRESIÓN
 # =============================================================================
 
 def comprimir_directorio(
     directorio: Union[str, Path],
-    archivo_salida: Optional[Union[str, Path]] = None,
+    ruta_salida: Union[str, Path],
     formato: str = 'zip'
-) -> Path:
+) -> None:
     """
     Comprime un directorio completo.
     
     Args:
         directorio: Directorio a comprimir
-        archivo_salida: Ruta del archivo comprimido (opcional)
-        formato: 'zip' o 'tar.gz'
-        
-    Returns:
-        Path del archivo creado
+        ruta_salida: Ruta del archivo de salida
+        formato: 'zip', 'gztar', 'bztar', 'xztar'
     """
     directorio = Path(directorio)
-    
-    if archivo_salida is None:
-        archivo_salida = directorio.with_suffix(f'.{formato}')
-    else:
-        archivo_salida = Path(archivo_salida)
+    ruta_salida = Path(ruta_salida)
     
     if formato == 'zip':
         shutil.make_archive(
-            str(archivo_salida.with_suffix('')),
+            str(ruta_salida.with_suffix('')),
             'zip',
             directorio.parent,
             directorio.name
         )
-        return archivo_salida.with_suffix('.zip')
-    
-    elif formato == 'tar.gz':
-        shutil.make_archive(
-            str(archivo_salida.with_suffix('').with_suffix('')),
-            'gztar',
-            directorio.parent,
-            directorio.name
-        )
-        return archivo_salida.with_suffix('.tar.gz')
-    
     else:
-        raise ValueError(f"Formato no soportado: {formato}")
+        shutil.make_archive(
+            str(ruta_salida.with_suffix('')),
+            formato,
+            directorio
+        )
+    
+    logger.info(f"Comprimido: {ruta_salida}")
 
 
 def descomprimir_archivo(
     archivo: Union[str, Path],
-    destino: Optional[Union[str, Path]] = None
-) -> Path:
+    directorio_destino: Union[str, Path]
+) -> None:
     """
-    Descomprime un archivo ZIP.
+    Descomprime un archivo a un directorio.
     
-    Args:
-        archivo: Archivo a descomprimir
-        destino: Directorio de destino (opcional)
-        
-    Returns:
-        Path del directorio extraído
+    Soporta ZIP, TAR, GZ.
     """
     archivo = Path(archivo)
-    
-    if destino is None:
-        destino = archivo.parent / archivo.stem
-    else:
-        destino = Path(destino)
-    
-    destino.mkdir(parents=True, exist_ok=True)
+    directorio_destino = Path(directorio_destino)
+    directorio_destino.mkdir(parents=True, exist_ok=True)
     
     if archivo.suffix == '.zip':
-        with ZipFile(archivo, 'r') as zf:
-            zf.extractall(destino)
+        with zipfile.ZipFile(archivo, 'r') as zf:
+            zf.extractall(directorio_destino)
+    elif archivo.suffix in ['.tar', '.gz', '.bz2', '.xz']:
+        shutil.unpack_archive(archivo, directorio_destino)
     else:
-        shutil.unpack_archive(archivo, destino)
+        raise ValueError(f"Formato no soportado: {archivo.suffix}")
     
-    return destino
+    logger.info(f"Descomprimido en: {directorio_destino}")
+
+
+# =============================================================================
+# UTILIDADES DE ARCHIVOS
+# =============================================================================
+
+def asegurar_directorio(ruta: Union[str, Path]) -> Path:
+    """
+    Asegura que un directorio exista, creándolo si es necesario.
+    
+    Args:
+        ruta: Ruta del directorio
+        
+    Returns:
+        Path del directorio
+    """
+    ruta = Path(ruta)
+    ruta.mkdir(parents=True, exist_ok=True)
+    return ruta
+
+
+def listar_archivos(
+    directorio: Union[str, Path],
+    patron: str = '*',
+    recursivo: bool = False
+) -> List[Path]:
+    """
+    Lista archivos en un directorio con patrón.
+    
+    Args:
+        directorio: Directorio a buscar
+        patron: Patrón glob (ej: '*.csv')
+        recursivo: Si buscar en subdirectorios
+        
+    Returns:
+        Lista de rutas de archivos
+    """
+    directorio = Path(directorio)
+    
+    if recursivo:
+        return list(directorio.rglob(patron))
+    else:
+        return list(directorio.glob(patron))
+
+
+def obtener_tamaño_archivo(ruta: Union[str, Path]) -> Tuple[float, str]:
+    """
+    Obtiene el tamaño de un archivo en unidad legible.
+    
+    Returns:
+        Tupla (valor, unidad) ej: (2.5, 'MB')
+    """
+    ruta = Path(ruta)
+    tamaño = ruta.stat().st_size
+    
+    for unidad in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if tamaño < 1024:
+            return round(tamaño, 2), unidad
+        tamaño /= 1024
+    
+    return round(tamaño, 2), 'TB'
+
+
+def limpiar_nombre_archivo(nombre: str) -> str:
+    """
+    Limpia un string para usarlo como nombre de archivo.
+    
+    Remueve caracteres no permitidos en sistemas de archivos.
+    """
+    # Caracteres no permitidos
+    invalidos = '<>:"/\\|?*'
+    for char in invalidos:
+        nombre = nombre.replace(char, '_')
+    
+    # Remover espacios múltiples
+    while '  ' in nombre:
+        nombre = nombre.replace('  ', ' ')
+    
+    return nombre.strip()
 
 
 # =============================================================================
@@ -701,38 +800,54 @@ def descomprimir_archivo(
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("SEISMEX - Utilidades de I/O")
+    print("SEISMEX Utils - Ejemplos de uso de io.py")
     print("=" * 60)
     
     # Crear datos de ejemplo
     datos_ejemplo = pd.DataFrame({
-        'fecha': pd.date_range('2024-01-01', periods=10, freq='D'),
-        'latitud': np.random.uniform(18.5, 20.5, 10),
-        'longitud': np.random.uniform(-104.5, -103.0, 10),
-        'profundidad_km': np.random.uniform(10, 50, 10),
-        'magnitud': np.random.uniform(3.0, 5.5, 10),
+        'fecha': pd.date_range('2024-01-01', periods=5, freq='D'),
+        'latitud': [19.2, 19.3, 19.4, 19.5, 19.6],
+        'longitud': [-103.7, -103.8, -103.9, -104.0, -104.1],
+        'profundidad_km': [10, 20, 30, 15, 25],
+        'magnitud': [3.5, 4.0, 3.2, 4.5, 3.8],
+        'lugar': ['Colima', 'Comala', 'Villa de Álvarez', 'Manzanillo', 'Tecomán']
     })
     
-    print(f"\nDatos de ejemplo: {len(datos_ejemplo)} eventos")
-    print(datos_ejemplo.head())
+    print("\n--- Datos de ejemplo ---")
+    print(datos_ejemplo)
     
-    # Exportar a GeoJSON
-    ruta_geojson = Path('/tmp/seismex_ejemplo.geojson')
+    # Ejemplo: Exportar a GeoJSON
+    print("\n--- Exportación GeoJSON ---")
+    ruta_geojson = Path('/tmp/ejemplo_seismex.geojson')
     exportar_geojson(datos_ejemplo, ruta_geojson)
-    print(f"\n✓ GeoJSON exportado: {ruta_geojson}")
+    print(f"Exportado: {ruta_geojson}")
     
-    # Exportar a KML
-    ruta_kml = Path('/tmp/seismex_ejemplo.kml')
-    exportar_kml(datos_ejemplo, ruta_kml, nombre='Sismos de Ejemplo')
-    print(f"✓ KML exportado: {ruta_kml}")
+    # Ejemplo: Exportar a KML
+    print("\n--- Exportación KML ---")
+    ruta_kml = Path('/tmp/ejemplo_seismex.kml')
+    exportar_kml(datos_ejemplo, ruta_kml)
+    print(f"Exportado: {ruta_kml}")
     
-    # Guardar pickle
-    ruta_pickle = Path('/tmp/seismex_ejemplo.pkl.gz')
+    # Ejemplo: Pickle
+    print("\n--- Serialización ---")
+    ruta_pickle = Path('/tmp/ejemplo_seismex.pkl.gz')
     guardar_pickle(datos_ejemplo, ruta_pickle)
-    print(f"✓ Pickle guardado: {ruta_pickle}")
-    
-    # Cargar pickle
     datos_cargados = cargar_pickle(ruta_pickle)
-    print(f"✓ Pickle cargado: {len(datos_cargados)} eventos")
+    print(f"Guardado y cargado: {len(datos_cargados)} filas")
     
-    print("\n✓ Todas las funciones de I/O funcionan correctamente")
+    # Ejemplo: Detección de formato
+    print("\n--- Detección de formato ---")
+    # Simular archivo SSN
+    ruta_test = Path('/tmp/test_ssn.csv')
+    pd.DataFrame({
+        'Fecha': ['2024-01-01'],
+        'Latitud': [19.2],
+        'Longitud': [-103.7],
+        'Magnitud': [4.0],
+        'Referencia de localizacion': ['Colima']
+    }).to_csv(ruta_test, index=False)
+    
+    formato = detectar_formato_catalogo(ruta_test)
+    print(f"Formato detectado: {formato}")
+    
+    print("\n✓ Todos los ejemplos ejecutados correctamente")
