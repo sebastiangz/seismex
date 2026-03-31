@@ -270,7 +270,7 @@ python scripts/pipeline_analisis.py --config resources/config/colima.yaml
 
 ```bash
 # Clonar
-git clone https://github.com/tu-usuario/seismex.git
+git clone https://github.com/sebastiangz/seismex.git
 cd seismex
 
 # Crear entorno
