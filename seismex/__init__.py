@@ -29,7 +29,7 @@ Ejemplo de uso rápido
 
 __version__ = "0.1.0"
 __author__ = "SEISMEX Team"
-__email__ = "seismex@example.com"
+__email__ = "sebastiangz@ucol.mx"
 __license__ = "MIT"
 
 # Imports principales para acceso conveniente
