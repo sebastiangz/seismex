@@ -284,9 +284,9 @@ utils/
 
 | Componente | Estado |
 |------------|--------|
-| `geo.py` | 🔄 En desarrollo |
-| `io.py` | 🔄 En desarrollo |
-| `validators.py` | 📋 Planificado |
+| `geo.py` | ✅ Completo |
+| `io.py` | ✅ Completo |
+| `validators.py` | ✅ Completo |
 | `constants.py` | ✅ Completo |
 
 ---
