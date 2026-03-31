@@ -450,10 +450,10 @@ geemap>=0.15.0
 ## Ejemplos de Salida
 
 ### Secciones Horizontales
-![Secciones horizontales ESD](../docs/examples/esd_horizontales.png)
+![Secciones horizontales ESD](../docs/examples/esd_secciones_horizontales.png)
 
 ### Perfiles Verticales
-![Perfiles verticales ESD](../../docs/examples/esd_verticales.png)
+![Perfiles verticales ESD](../docs/examples/esd_secciones_verticales.png)
 
 ### Mapa Interactivo
 Ver ejemplo en `notebooks/visualizacion_interactiva.ipynb`
