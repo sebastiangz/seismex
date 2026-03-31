@@ -107,7 +107,7 @@ pip install seismex
 ### Desde código fuente
 
 ```bash
-git clone https://github.com/tu-usuario/seismex.git
+git clone https://github.com/sebastiangz/seismex.git
 cd seismex
 pip install -e .
 ```
