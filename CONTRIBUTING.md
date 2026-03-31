@@ -60,7 +60,7 @@ Este proyecto sigue un código de conducta inclusivo y respetuoso. Se espera que
 
 ```bash
 # Clonar tu fork
-git clone https://github.com/TU_USUARIO/seismex.git
+git clone https://github.com/sebastiangz/seismex.git
 cd seismex
 
 # Crear ambiente con conda
