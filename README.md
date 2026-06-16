@@ -33,7 +33,7 @@
 | **Gutenberg-Richter** | Análisis de valor-b y magnitud de completitud | ✅ Completo |
 | **Isosistas** | Mapas de intensidad sísmica | 🔄 En desarrollo |
 | **PSHA** | Análisis Probabilístico de Peligro Sísmico | 📋 Planificado |
-| **Optimización GA** | Algoritmos genéticos multiobjetivo (NSGA-II) | 📋 Planificado |
+| **Optimización GA** | Algoritmos genéticos multiobjetivo (NSGA-II) | 🔄 En desarrollo |
 
 ### Fuentes de Datos Soportadas
 
