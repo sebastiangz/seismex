@@ -10,6 +10,7 @@ Módulo de análisis sísmico de SEISMEX. Contiene implementaciones de metodolog
 - [ESD - Energy Space Density](#esd---energy-space-density)
 - [Gutenberg-Richter](#gutenberg-richter)
 - [Isosistas](#isosistas)
+- [Modelos de Fuentes](#modelos-de-fuentes)
 - [PSHA](#psha)
 - [Ejemplos Integrados](#ejemplos-integrados)
 
@@ -22,442 +23,374 @@ Módulo de análisis sísmico de SEISMEX. Contiene implementaciones de metodolog
 | `esd` | Energy Space Density (Del Pezzo et al.) | ✅ Completo |
 | `gutenberg_richter` | Análisis de valor-b y Mc | ✅ Completo |
 | `isoseismal` | Mapas de isosistas (GMPEs/IPEs) | ✅ Completo |
-| `psha` | Probabilistic Seismic Hazard Analysis | 📋 Planificado |
-| `source_models` | Modelos de fuentes sísmicas | 📋 Planificado |
+| `source_models` | Modelos de fuentes sísmicas | ✅ Completo |
+| `psha` | Probabilistic Seismic Hazard Analysis | ✅ Completo |
 
 ---
 
 ## ESD - Energy Space Density
 
-Implementación de la metodología **Energy Space Density** basada en Del Pezzo et al. (2024), publicada en Geophysical Research Letters.
-
-### Fundamento Teórico
-
-La ESD representa la densidad de energía sísmica liberada en un volumen tridimensional:
-
-```
-ESD(x,y,z) = Σ E_i × K(d_i, σ)
-```
-
-Donde:
-- `E_i = 10^(1.5 × Mw + 11.8)` ergios (energía del evento i)
-- `K(d, σ)` = kernel gaussiano 3D
-- `d_i` = distancia al centro de la celda
-
-### Clases
+Implementación de la metodología **Energy Space Density** basada en Del Pezzo et al. (2024).
 
 ```python
-from seismex.analysis.esd import (
-    ConfiguracionESD,
-    CalculadoraESD,
-    ResultadoESD
-)
-```
+from seismex.analysis import CalculadoraESD, ConfiguracionESD
 
-#### ConfiguracionESD
-
-```python
-config = ConfiguracionESD(
-    # Parámetros de malla
-    tamano_celda_km=10.0,           # Tamaño de celda (km)
-    paso_deslizamiento_km=2.5,      # Paso de deslizamiento (km)
-    
-    # Filtros
-    magnitud_minima=2.4,            # Magnitud mínima (Mc)
-    profundidad_maxima_km=150.0,    # Profundidad máxima
-    
-    # Suavizado
-    suavizado_horizontal=1.0,       # Factor de suavizado XY
-    suavizado_vertical=0.5,         # Factor de suavizado Z
-    suavizado_rms=0.5,              # RMS para profundidad
-    
-    # Normalización
-    normalizar=True,                # Normalizar por máximo
-    escala_log=True                 # Usar escala logarítmica
-)
-```
-
-#### CalculadoraESD
-
-```python
-from seismex.analysis import CalculadoraESD
-from seismex.core import CatalogoSismico
-
-# Cargar datos
-catalogo = CatalogoSismico.desde_csv('catalogo.csv')
-
-# Crear calculadora
+config = ConfiguracionESD(tamano_celda_km=10.0, magnitud_minima=2.4)
 calculadora = CalculadoraESD(config)
-
-# Calcular ESD
 resultado = calculadora.calcular_esd(catalogo)
-
-# Información del resultado
-print(f"Energía total: {resultado.energia_total:.2e} ergios")
-print(f"Dimensiones malla: {resultado.dimensiones}")
-print(f"Rango log10(ESD): {resultado.esd_min:.2f} a {resultado.esd_max:.2f}")
 ```
-
-#### Obtener Secciones
-
-```python
-# Sección horizontal (mapa a profundidad fija)
-X, Y, ESD = calculadora.obtener_seccion_horizontal(profundidad_km=30)
-
-# Sección vertical N-S (perfil latitudinal)
-Y, Z, ESD = calculadora.obtener_seccion_vertical_ns(longitud=-103.5)
-
-# Sección vertical E-W (perfil longitudinal)
-X, Z, ESD = calculadora.obtener_seccion_vertical_ew(latitud=19.3)
-
-# Sección a lo largo de perfil personalizado
-puntos = [(19.0, -104.0), (19.5, -103.5), (20.0, -103.0)]
-D, Z, ESD = calculadora.obtener_seccion_perfil(puntos)
-```
-
-### Paleta de Colores
-
-La paleta reproduce los colores del artículo de Del Pezzo et al.:
-
-```python
-from seismex.analysis.esd import PaletaColoresESD
-
-paleta = PaletaColoresESD()
-
-# Niveles de contorno estándar (log10 ESD normalizado)
-niveles = [-12, -7, -4.5, -3.0, -2.5, -2.0, -1.0, -0.5, 0, 0.5]
-
-# Obtener colormap matplotlib
-cmap = paleta.obtener_colormap()
-norm = paleta.obtener_normalizacion()
-```
-
-| Nivel | Color | Interpretación |
-|-------|-------|----------------|
-| < -7 | Índigo | Muy baja energía |
-| -7 a -4 | Azul | Baja energía |
-| -4 a -2 | Verde | Moderada |
-| -2 a -0.5 | Rosa | Alta |
-| > -0.5 | Rojo | Muy alta energía |
 
 ---
 
 ## Gutenberg-Richter
 
-Análisis de la relación frecuencia-magnitud para estimar la magnitud de completitud (Mc) y el valor-b.
-
-### Fundamento Teórico
-
-```
-log₁₀(N) = a - b × M
-```
-
-Donde:
-- `N` = número de eventos con magnitud ≥ M
-- `a` = tasa de sismicidad
-- `b` = pendiente (~1.0 para tectónica global)
-
-### Métodos para Mc
-
-| Método | Código | Descripción |
-|--------|--------|-------------|
-| MAXC | `'maxc'` | Máximo de la curva (+ 0.2 corrección) |
-| GFT | `'gft'` | Goodness-of-fit test |
-| MBS | `'mbs'` | Método b-value stability |
-| EMR | `'emr'` | Entire magnitude range |
-
-### Métodos para valor-b
-
-| Método | Código | Descripción |
-|--------|--------|-------------|
-| MLE | `'mle'` | Maximum Likelihood (Aki, 1965) |
-| LSQ | `'lsq'` | Mínimos cuadrados |
-| BPOS | `'bpos'` | b-positive (Herrmann, 1979) |
-
-### Uso
+Análisis de la relación frecuencia-magnitud para estimar Mc y valor-b.
 
 ```python
 from seismex.analysis import AnalizadorGutenbergRichter
 
-# Crear analizador
-gr = AnalizadorGutenbergRichter(
-    metodo_mc='maxc',           # Método para Mc
-    metodo_b='mle',             # Método para b
-    correccion_mc=0.2,          # Corrección conservadora (Woessner)
-    bin_magnitud=0.1,           # Ancho de bin
-    bootstrap_n=1000            # Iteraciones Monte Carlo
-)
-
-# Analizar
+gr = AnalizadorGutenbergRichter(metodo_mc='maxc', metodo_b='mle')
 resultado = gr.analizar(catalogo)
-
-# Resultados
-print(f"Mc = {resultado.mc:.2f}")
-print(f"b = {resultado.b_value:.3f} ± {resultado.b_error:.3f}")
-print(f"a = {resultado.a_value:.3f} ± {resultado.a_error:.3f}")
-print(f"N(M≥Mc) = {resultado.n_eventos}")
-
-# Graficar
-fig = gr.graficar_fmd(
-    mostrar_ajuste=True,
-    mostrar_mc=True,
-    guardar='gutenberg_richter.png'
-)
-```
-
-### Análisis Espacio-Temporal
-
-```python
-# Variación temporal del valor-b
-resultados_temporales = gr.analizar_temporal(
-    catalogo,
-    ventana_años=2.0,
-    paso_meses=6
-)
-
-# Graficar evolución
-gr.graficar_evolucion_b(resultados_temporales)
-
-# Variación espacial (mapa de valor-b)
-mapa_b = gr.analizar_espacial(
-    catalogo,
-    tamano_celda_grados=0.5,
-    min_eventos=50
-)
-
-gr.graficar_mapa_b(mapa_b, guardar='mapa_b_value.png')
+print(f"Mc = {resultado.mc:.2f}, b = {resultado.b_value:.3f}")
 ```
 
 ---
 
 ## Isosistas
 
-Generación de mapas de intensidad sísmica (isosistas) basados en ecuaciones de predicción del movimiento del terreno (GMPE) y ecuaciones de predicción de intensidad (IPE).
+Generación de mapas de intensidad sísmica con GMPEs e IPEs.
 
-### Estado: ✅ Completo
+### Modelos Implementados
 
-### Componentes Implementados
-
-#### GMPEs (Ground Motion Prediction Equations)
-
-| Modelo | Clase | Región | Referencia |
-|--------|-------|--------|------------|
-| Zhao (2006) | `GMPEZhao2006` | Subducción (Global) | Zhao et al., BSSA 2006 |
-| García (2005) | `GMPEGarcia2005` | México | García et al., GJI 2005 |
-| Atkinson-Boore (2003) | `GMPEAtkinsonBoore2003` | Intraplaca | Atkinson & Boore, BSSA 2003 |
-
-#### IPEs (Intensity Prediction Equations)
-
-| Modelo | Clase | Región | Referencia |
-|--------|-------|--------|------------|
-| Allen (2012) | `IPEAllen2012` | Global (corteza activa) | Allen et al., J. Seismology 2012 |
-| Atkinson-Wald (2007) | `IPEAtkinsonWald2007` | Global (desde PGM) | Atkinson & Wald, SRL 2007 |
-| CENAPRED (2006) | `IPECENAPRED2006` | México | CENAPRED 2006 |
-
-### Uso Básico
-
-```python
-from seismex.analysis.isoseismal import (
-    GeneradorIsosistas,
-    crear_generador_mexico,
-    crear_generador_subduccion
-)
-
-# Opción 1: Generador genérico
-gen = GeneradorIsosistas(
-    ipe='allen_2012',           # Intensity Prediction Equation
-    gmpe='zhao_2006',           # Ground Motion Prediction Equation (opcional)
-    vs30_default=760            # Velocidad Vs30 por defecto (m/s)
-)
-
-# Opción 2: Generador preconfigurado para México
-gen = crear_generador_mexico()  # Usa CENAPRED + García
-
-# Opción 3: Generador para subducción
-gen = crear_generador_subduccion()  # Usa Allen + Zhao
-
-# Generar isosistas para un evento
-resultado = gen.calcular(
-    latitud=19.32,
-    longitud=-103.64,
-    profundidad_km=15,
-    magnitud=6.5,
-    resolucion_km=5.0,          # Resolución espacial
-    radio_max_km=300            # Radio máximo de cálculo
-)
-
-# Información del resultado
-print(f"Intensidad máxima: {resultado.intensidad_maxima:.1f} MMI")
-print(f"Intensidad en epicentro: {resultado.intensidad_epicentro:.1f} MMI")
-```
-
-### Visualización
-
-```python
-# Graficar mapa de isosistas
-resultado.graficar(
-    mostrar_epicentro=True,
-    mostrar_contornos=True,
-    colorbar=True
-)
-
-# Obtener contornos como lista de diccionarios
-contornos = resultado.obtener_contornos(niveles=[4, 5, 6, 7, 8])
-for c in contornos:
-    print(f"MMI {c['nivel']}: {c['descripcion']} - {c['color']}")
-```
-
-### Exportación
-
-```python
-# Exportar a GeoJSON (contornos vectoriales)
-resultado.exportar_geojson('isosistas_m65.geojson')
-
-# Exportar a Shapefile
-resultado.exportar_shapefile('isosistas_m65.shp')
-
-# Exportar grilla a GeoTIFF
-resultado.exportar_geotiff('intensidad_m65.tif')
-
-# Convertir a GeoDataFrame para análisis SIG
-gdf = resultado.to_geodataframe()
-print(gdf.head())
-```
-
-### Modelo de Sitio (Efectos de Vs30)
-
-```python
-from seismex.analysis.isoseismal import ModeloSitio, GeneradorIsosistas
-import numpy as np
-
-# Crear modelo de sitio con raster de Vs30
-vs30_raster = np.load('vs30_mexico.npy')  # Tu grilla de Vs30
-bounds = (-118, 14, -86, 33)  # lon_min, lat_min, lon_max, lat_max
-
-modelo_sitio = ModeloSitio(
-    vs30_default=760.0,         # Valor por defecto donde no hay datos
-    vs30_raster=vs30_raster,    # Grilla de valores
-    bounds=bounds               # Límites del raster
-)
-
-# Crear generador con modelo de sitio
-gen = GeneradorIsosistas(
-    ipe='cenapred_2006',
-    modelo_sitio=modelo_sitio
-)
-```
-
-### Escenarios Múltiples
-
-```python
-# Calcular isosistas combinadas de múltiples eventos
-eventos = [
-    {'latitud': 19.32, 'longitud': -103.64, 'profundidad_km': 15, 'magnitud': 6.5},
-    {'latitud': 19.50, 'longitud': -103.80, 'profundidad_km': 20, 'magnitud': 5.8},
-]
-
-resultado_escenario = gen.calcular_escenario(
-    eventos=eventos,
-    resolucion_km=5.0,
-    metodo_combinacion='max'  # 'max', 'mean', o 'sum'
-)
-```
-
-### Escala de Intensidad MMI
-
-| MMI | Descripción | Color |
-|-----|-------------|-------|
-| I | No sentido | #FFFFFF |
-| II | Muy débil | #ACD8E9 |
-| III | Débil | #ACD8E9 |
-| IV | Ligero | #83D0DA |
-| V | Moderado | #7BC87F |
-| VI | Fuerte | #F9F518 |
-| VII | Muy fuerte | #FAC611 |
-| VIII | Severo | #FA8A11 |
-| IX | Violento | #F7100C |
-| X | Extremo | #C80F0A |
-| XI | Casi total destrucción | #800000 |
-| XII | Total destrucción | #400000 |
-
-### Conversión PGM a MMI
-
-```python
-from seismex.analysis.isoseismal import pga_a_mmi_wald, pgv_a_mmi_wald
-
-# Convertir PGA (g) a MMI
-mmi = pga_a_mmi_wald(0.15)  # 0.15g → ~VII MMI
-
-# Convertir PGV (cm/s) a MMI
-mmi = pgv_a_mmi_wald(20.0)  # 20 cm/s → ~VII MMI
-```
-
-### Listar Modelos Disponibles
+| GMPEs | IPEs |
+|-------|------|
+| Zhao et al. (2006) | Allen et al. (2012) |
+| García et al. (2005) | Atkinson & Wald (2007) |
+| Atkinson & Boore (2003) | CENAPRED (2006) |
 
 ```python
 from seismex.analysis.isoseismal import GeneradorIsosistas
 
-modelos = GeneradorIsosistas.listar_modelos()
-print("IPEs:", modelos['ipes'])
-print("GMPEs:", modelos['gmpes'])
+gen = GeneradorIsosistas(ipe='cenapred_2006', gmpe='garcia_2005')
+resultado = gen.calcular(
+    latitud=19.32, longitud=-103.64,
+    profundidad_km=15, magnitud=6.5
+)
+resultado.graficar()
+resultado.exportar_geojson('isosistas.geojson')
+```
+
+---
+
+## Modelos de Fuentes
+
+Modelos de fuentes sísmicas para análisis PSHA.
+
+### Estado: ✅ Completo
+
+### Tipos de Fuentes
+
+| Clase | Descripción |
+|-------|-------------|
+| `FuenteArea` | Zonas sismogénicas de área |
+| `FuenteFalla` | Fallas activas con geometría |
+| `FuentePuntual` | Fuentes puntuales (volcanes, etc.) |
+
+### Distribuciones de Magnitud
+
+| Clase | Descripción |
+|-------|-------------|
+| `DistribucionGutenbergRichter` | G-R truncada |
+| `DistribucionCaracteristica` | Youngs & Coppersmith (1985) |
+
+### Uso Básico
+
+```python
+from seismex.analysis.source_models import (
+    ModeloFuentes,
+    FuenteArea,
+    DistribucionGutenbergRichter,
+    DistribucionProfundidad,
+    TipoFalla,
+    crear_modelo_mexico_simplificado
+)
+
+# Opción 1: Modelo preconfigurado para México
+modelo = crear_modelo_mexico_simplificado()
+
+# Opción 2: Crear modelo personalizado
+modelo = ModeloFuentes(nombre="Mi Modelo", version="1.0")
+
+# Agregar zona de área
+modelo.agregar_zona_area(
+    nombre="Subducción Pacífico",
+    poligono=[
+        (14.5, -98.0), (16.0, -95.0), (16.5, -93.0),
+        (15.5, -92.0), (14.0, -94.0), (14.0, -97.0)
+    ],
+    a_value=5.0,
+    b_value=0.9,
+    mmin=5.0,
+    mmax=8.2,
+    profundidad_media=30
+)
+
+# Agregar falla
+modelo.agregar_falla(
+    nombre="Falla Acambay",
+    traza=[(19.8, -99.8), (20.1, -99.5)],
+    longitud_km=45,
+    ancho_km=15,
+    buzamiento=60,
+    slip_rate_mm_yr=0.5,
+    tipo_falla=TipoFalla.NORMAL
+)
+
+# Ver resumen
+print(modelo.resumen())
+
+# Generar catálogo sintético
+catalogo = modelo.muestrear_catalogo(n_eventos=1000)
+
+# Exportar
+modelo.exportar_json('modelo_fuentes.json')
+gdf = modelo.to_geodataframe()
+```
+
+### Fuente de Área Detallada
+
+```python
+from seismex.analysis.source_models import (
+    FuenteArea,
+    DistribucionGutenbergRichter,
+    DistribucionProfundidad,
+    TipoDistribucionProfundidad
+)
+
+# Distribución de magnitud G-R
+dist_mag = DistribucionGutenbergRichter(
+    mmin=4.5,
+    mmax=7.8,
+    a_value=4.2,
+    b_value=0.95
+)
+
+# Distribución de profundidad
+dist_prof = DistribucionProfundidad(
+    tipo=TipoDistribucionProfundidad.TRIANGULAR,
+    prof_min=5,
+    prof_max=40,
+    prof_media=20
+)
+
+# Crear fuente
+fuente = FuenteArea(
+    nombre="Zona Oaxaca",
+    poligono=[
+        (15.5, -98.5), (17.0, -96.0), (17.5, -95.0),
+        (16.5, -94.5), (15.0, -96.0)
+    ],
+    distribucion_magnitud=dist_mag,
+    distribucion_profundidad=dist_prof
+)
+
+# Propiedades
+print(f"Área: {fuente.area_km2():.0f} km²")
+print(f"Tasa total: {fuente.tasa_total():.2f} eventos/año")
+
+# Muestrear eventos
+eventos = fuente.muestrear_eventos(100)
+```
+
+### Fuente de Falla
+
+```python
+from seismex.analysis.source_models import FuenteFalla, TipoFalla
+
+fuente = FuenteFalla(
+    nombre="Falla San Andrés",
+    traza=[(34.0, -118.5), (35.5, -117.0), (36.5, -116.0)],
+    longitud_km=150,
+    ancho_km=15,
+    buzamiento=90,
+    rake=180,
+    tipo_falla=TipoFalla.LATERAL_DERECHA,
+    slip_rate_mm_yr=25.0,
+    distribucion_magnitud=DistribucionGutenbergRichter(mmin=5.0, mmax=8.0)
+)
+
+# Estimar Mmax con Wells & Coppersmith
+mmax = fuente.magnitud_maxima_wells_coppersmith()
+print(f"Mmax estimada: {mmax:.1f}")
+
+# Momento sísmico anual
+m0 = fuente.momento_sismico_anual()
+print(f"M0 anual: {m0:.2e} dyn·cm/año")
 ```
 
 ---
 
 ## PSHA
 
-Análisis Probabilístico de Peligro Sísmico basado en la metodología de Cornell-McGuire.
+Análisis Probabilístico de Peligro Sísmico basado en Cornell-McGuire.
 
-### Estado: 📋 Planificado
+### Estado: ✅ Completo
 
-### Estructura Planificada
+### Componentes
+
+| Clase | Descripción |
+|-------|-------------|
+| `AnalizadorPSHA` | Motor principal de cálculo |
+| `CurvaPeligro` | Curva de excedencia de intensidad |
+| `MapaPeligro` | Mapa espacial de peligro |
+| `Desagregacion` | Análisis de contribución M-R-ε |
+| `ArbolLogico` | Manejo de incertidumbre epistémica |
+
+### Uso Básico
+
+```python
+from seismex.analysis.psha import AnalizadorPSHA, crear_analizador_mexico
+from seismex.analysis.source_models import crear_modelo_mexico_simplificado
+from seismex.analysis.isoseismal import GMPEGarcia2005, GMPEZhao2006
+
+# Opción 1: Analizador preconfigurado para México
+psha = crear_analizador_mexico(vs30=400)
+
+# Opción 2: Configuración manual
+fuentes = crear_modelo_mexico_simplificado()
+psha = AnalizadorPSHA(fuentes=fuentes, vs30=760)
+psha.agregar_gmpe(GMPEGarcia2005(), peso=0.6)
+psha.agregar_gmpe(GMPEZhao2006(), peso=0.4)
+
+# Ver configuración
+print(psha.resumen())
+```
+
+### Curva de Peligro
+
+```python
+# Calcular curva de peligro para un sitio
+curva = psha.calcular_curva_peligro(
+    sitio=(19.4, -99.1),  # Ciudad de México
+    vs30=350,
+    medida=MedidaIntensidad.PGA
+)
+
+# Obtener PGA para diferentes períodos de retorno
+pga_475 = curva.intensidad_para_periodo_retorno(475)
+pga_2475 = curva.intensidad_para_periodo_retorno(2475)
+print(f"PGA 475 años: {pga_475:.3f} g")
+print(f"PGA 2475 años: {pga_2475:.3f} g")
+
+# Probabilidad de exceder 0.2g en 50 años
+prob = curva.probabilidad_excedencia(0.2, tiempo_exposicion=50)
+print(f"P(PGA > 0.2g en 50 años): {prob:.1%}")
+
+# Graficar curva
+curva.graficar()
+```
+
+### Mapa de Peligro
+
+```python
+# Calcular mapa para TR=475 años
+mapa = psha.calcular_mapa_peligro(
+    region={'lat': (14, 20), 'lon': (-105, -95)},
+    periodo_retorno=475,
+    resolucion=0.25,
+    vs30=400,
+    verbose=True
+)
+
+# Propiedades
+print(f"PGA máxima: {mapa.intensidad_maxima:.3f} g")
+print(f"PGA media: {mapa.intensidad_media:.3f} g")
+
+# Obtener PGA en un punto
+pga_cdmx = mapa.obtener_intensidad(19.4, -99.1)
+
+# Graficar
+mapa.graficar(contornos=True)
+
+# Exportar
+mapa.exportar_geotiff('peligro_475.tif')
+gdf = mapa.to_geodataframe()
+```
+
+### Espectro de Peligro Uniforme (UHS)
+
+```python
+# Calcular UHS para TR=475 años
+periodos, aceleraciones = psha.calcular_espectro_uniforme(
+    sitio=(19.4, -99.1),
+    periodo_retorno=475,
+    periodos=[0.0, 0.1, 0.2, 0.3, 0.5, 1.0, 2.0],
+    vs30=350
+)
+
+# Graficar
+import matplotlib.pyplot as plt
+plt.figure(figsize=(10, 6))
+plt.plot(periodos, aceleraciones, 'o-')
+plt.xlabel('Período (s)')
+plt.ylabel('Sa (g)')
+plt.title('Espectro de Peligro Uniforme - TR=475 años')
+plt.grid(True)
+plt.show()
+```
+
+### Desagregación
+
+```python
+# Desagregar peligro para PGA=0.3g
+desag = psha.desagregar(
+    sitio=(19.4, -99.1),
+    nivel_intensidad=0.3,
+    vs30=350
+)
+
+# Escenarios dominantes
+print(f"Magnitud modal: {desag.magnitud_modal:.1f}")
+print(f"Distancia modal: {desag.distancia_modal:.0f} km")
+print(f"Epsilon modal: {desag.epsilon_modal:.2f}")
+
+print(f"Magnitud media: {desag.magnitud_media:.1f}")
+print(f"Distancia media: {desag.distancia_media:.0f} km")
+
+# Graficar
+desag.graficar_MR()
+```
+
+### Árbol Lógico
+
+```python
+from seismex.analysis.psha import ArbolLogico
+
+# Crear árbol lógico
+arbol = ArbolLogico()
+arbol.agregar_rama("García 2005", peso=0.5, gmpe=GMPEGarcia2005())
+arbol.agregar_rama("Zhao 2006", peso=0.3, gmpe=GMPEZhao2006())
+arbol.agregar_rama("AB 2003", peso=0.2, gmpe=GMPEAtkinsonBoore2003())
+
+arbol.normalizar_pesos()
+print(f"Pesos válidos: {arbol.validar()}")
+```
+
+### Utilidades
 
 ```python
 from seismex.analysis.psha import (
-    AnalizadorPSHA,
-    ModeloFuentes,
-    ArbolLogico
+    calcular_probabilidad_poisson,
+    periodo_retorno_desde_probabilidad
 )
 
-# Definir modelo de fuentes
-fuentes = ModeloFuentes()
-fuentes.agregar_zona_area(
-    nombre='Fosa Mesoamericana',
-    geometria='fosa_mesoamericana.geojson',
-    a_value=4.5,
-    b_value=0.95,
-    mmax=8.2,
-    profundidad_media=25
-)
+# Probabilidad de al menos 1 evento en 50 años (tasa=0.01/año)
+prob = calcular_probabilidad_poisson(tasa=0.01, tiempo=50, n_eventos=1)
+print(f"P(N>=1 en 50 años): {prob:.1%}")
 
-# Crear analizador
-psha = AnalizadorPSHA(
-    fuentes=fuentes,
-    gmpe=['zhao_2006', 'garcia_2005'],  # Árbol lógico
-    pesos_gmpe=[0.6, 0.4],
-    periodos_retorno=[475, 975, 2475],   # años
-    vs30=760                              # Roca
-)
-
-# Calcular curva de peligro
-curva = psha.calcular_curva_peligro(
-    sitio=(19.32, -103.64),
-    intensidad='PGA'
-)
-
-# Calcular mapa de peligro
-mapa = psha.calcular_mapa_peligro(
-    region={'lat': (14, 33), 'lon': (-118, -86)},
-    resolucion=0.1,
-    periodo_retorno=475
-)
-
-# Desagregación
-desag = psha.desagregar(
-    sitio=(19.32, -103.64),
-    nivel_peligro=0.1,  # g
-    tipo='MRε'
-)
+# Período de retorno para 10% en 50 años
+tr = periodo_retorno_desde_probabilidad(probabilidad=0.10, tiempo=50)
+print(f"TR para 10% en 50 años: {tr:.0f} años")
 ```
 
 ---
@@ -467,39 +400,47 @@ desag = psha.desagregar(
 ### Pipeline Completo de Análisis
 
 ```python
-from seismex.core import CatalogoSismico, Preprocesador
-from seismex.analysis import (
-    AnalizadorGutenbergRichter,
-    CalculadoraESD,
-    ConfiguracionESD
-)
+from seismex.core import CatalogoSismico
+from seismex.analysis import AnalizadorGutenbergRichter, CalculadoraESD, ConfiguracionESD
 from seismex.analysis.isoseismal import GeneradorIsosistas
-from seismex.visualization import VisualizadorESD
+from seismex.analysis.source_models import crear_modelo_mexico_simplificado
+from seismex.analysis.psha import AnalizadorPSHA
 
-# 1. Cargar y preparar datos
+# 1. Cargar catálogo
 catalogo = CatalogoSismico.desde_csv('ssn_colima.csv', formato='ssn')
-catalogo.homogeneizar_magnitudes('Mw')
-
-prep = Preprocesador()
-catalogo = prep.declustering(catalogo)
 
 # 2. Análisis Gutenberg-Richter
 gr = AnalizadorGutenbergRichter()
 resultado_gr = gr.analizar(catalogo)
-mc = resultado_gr.mc
+print(f"Mc = {resultado_gr.mc:.2f}, b = {resultado_gr.b_value:.3f}")
 
-print(f"Mc = {mc:.2f}, b = {resultado_gr.b_value:.3f}")
-
-# 3. Análisis ESD con Mc calculado
-config = ConfiguracionESD(
-    tamano_celda_km=10.0,
-    magnitud_minima=mc
-)
-
+# 3. Análisis ESD
+config = ConfiguracionESD(tamano_celda_km=10.0, magnitud_minima=resultado_gr.mc)
 esd = CalculadoraESD(config)
 resultado_esd = esd.calcular_esd(catalogo)
 
-# 4. Generar isosistas para el evento más grande
+# 4. Crear modelo de fuentes calibrado
+from seismex.analysis.source_models import ModeloFuentes
+modelo = ModeloFuentes(nombre="Colima Calibrado")
+modelo.agregar_zona_area(
+    nombre="Zona Colima",
+    poligono=[(18.5, -105.0), (20.0, -104.0), (20.0, -102.5), (18.5, -103.0)],
+    a_value=resultado_gr.a_value,
+    b_value=resultado_gr.b_value,
+    mmin=resultado_gr.mc,
+    mmax=8.0
+)
+
+# 5. Análisis PSHA
+from seismex.analysis.isoseismal import GMPEGarcia2005
+psha = AnalizadorPSHA(fuentes=modelo, vs30=400)
+psha.agregar_gmpe(GMPEGarcia2005(), peso=1.0)
+
+# Curva de peligro
+curva = psha.calcular_curva_peligro(sitio=(19.3, -103.7))
+print(f"PGA 475 años: {curva.intensidad_para_periodo_retorno(475):.3f} g")
+
+# 6. Isosistas del evento más grande
 evento_max = catalogo.obtener_evento_maximo()
 gen = GeneradorIsosistas(ipe='cenapred_2006')
 isosistas = gen.calcular(
@@ -509,46 +450,38 @@ isosistas = gen.calcular(
     magnitud=evento_max.magnitud
 )
 
-# 5. Visualizar y exportar
-viz = VisualizadorESD(resultado_esd)
-viz.graficar_secciones_horizontales([10, 30, 50])
-viz.exportar_geotiff('esd_colima.tif', profundidad_km=30)
-
-isosistas.graficar()
-isosistas.exportar_geojson('isosistas_evento_max.geojson')
+# 7. Exportar resultados
+resultado_esd.exportar_geotiff('esd_colima.tif')
+isosistas.exportar_geojson('isosistas_max.geojson')
+curva.graficar()
 ```
 
-### Análisis de Evento Específico
+### Análisis de Escenario Sísmico
 
 ```python
-from seismex.analysis.isoseismal import (
-    GeneradorIsosistas,
-    TipoEvento
-)
+from seismex.analysis.isoseismal import GeneradorIsosistas, TipoEvento
+from seismex.analysis.psha import AnalizadorPSHA
 
-# Configurar para evento de subducción
-gen = GeneradorIsosistas(
-    ipe='allen_2012',
-    gmpe='zhao_2006'
-)
+# Definir escenario: M8.0 en la brecha de Guerrero
+escenario = {
+    'latitud': 17.0,
+    'longitud': -100.5,
+    'profundidad_km': 20,
+    'magnitud': 8.0
+}
 
-# Sismo del 19 de septiembre de 2017
-resultado = gen.calcular(
-    latitud=18.40,
-    longitud=-98.72,
-    profundidad_km=51,
-    magnitud=7.1,
-    tipo_evento=TipoEvento.SUBDUCCION_INTRAPLACA,
+# Generar isosistas
+gen = GeneradorIsosistas(ipe='allen_2012', gmpe='zhao_2006')
+isosistas = gen.calcular(
+    tipo_evento=TipoEvento.SUBDUCCION_INTERFAZ,
     resolucion_km=2.0,
-    radio_max_km=400
+    radio_max_km=500,
+    **escenario
 )
 
-# Visualizar
-import matplotlib.pyplot as plt
-fig, ax = plt.subplots(figsize=(12, 10))
-resultado.graficar(ax=ax, titulo="Isosistas - Sismo 19S 2017 (M7.1)")
-plt.savefig('isosistas_19s_2017.png', dpi=300, bbox_inches='tight')
-plt.show()
+print(f"Intensidad máxima: {isosistas.intensidad_maxima:.1f} MMI")
+isosistas.graficar(titulo="Escenario M8.0 Brecha de Guerrero")
+isosistas.exportar_geojson('escenario_guerrero_m80.geojson')
 ```
 
 ---
@@ -561,8 +494,8 @@ seismex/analysis/
 ├── esd.py                    # Energy Space Density ✅
 ├── gutenberg_richter.py      # Análisis G-R ✅
 ├── isoseismal.py             # Isosistas (GMPEs/IPEs) ✅
-├── psha.py                   # PSHA (planificado)
-├── source_models.py          # Modelos de fuentes (planificado)
+├── source_models.py          # Modelos de fuentes ✅
+├── psha.py                   # PSHA Cornell-McGuire ✅
 └── README.md                 # Este archivo
 ```
 
@@ -576,19 +509,23 @@ seismex/analysis/
 ### Gutenberg-Richter
 - Aki, K. (1965). "Maximum likelihood estimate of b in the formula log N = a - bM." *BERI*, 43, 237-239.
 - Woessner, J., & Wiemer, S. (2005). "Assessing the quality of earthquake catalogues." *BSSA*, 95(2), 684-698.
-- Shi, Y., & Bolt, B. A. (1982). "The standard error of the magnitude-frequency b value." *BSSA*, 72(5), 1677-1687.
 
 ### Isosistas / GMPEs / IPEs
-- Allen, T.I., et al. (2012). "Intensity attenuation for active crustal regions." *Journal of Seismology*, 16, 409-433.
-- Atkinson, G.M. & Wald, D.J. (2007). "Did You Feel It? intensity data: A surprisingly good measure of earthquake ground motion." *SRL*, 78(3), 362-368.
+- Allen, T.I., et al. (2012). "Intensity attenuation for active crustal regions." *J. Seismology*, 16, 409-433.
 - Zhao, J.X., et al. (2006). "Attenuation relations of strong ground motion in Japan." *BSSA*, 96(3), 898-913.
 - García, D., et al. (2005). "A predictive ground motion model for Mexico." *GJI*, 162(3), 908-924.
 - Atkinson, G.M. & Boore, D.M. (2003). "Empirical ground-motion relations for subduction-zone earthquakes." *BSSA*, 93(4), 1703-1729.
 - CENAPRED (2006). "Guía básica para la elaboración de atlas estatales y municipales de peligros y riesgos."
 
+### Modelos de Fuentes
+- Youngs, R.R. & Coppersmith, K.J. (1985). "Implications of fault slip rates and earthquake recurrence models." *BSSA*, 75(4), 939-964.
+- Wells, D.L. & Coppersmith, K.J. (1994). "New empirical relationships among magnitude, rupture length, rupture width, rupture area, and surface displacement." *BSSA*, 84(4), 974-1002.
+- Gutenberg, B. & Richter, C.F. (1944). "Frequency of earthquakes in California." *BSSA*, 34(4), 185-188.
+
 ### PSHA
 - Cornell, C.A. (1968). "Engineering seismic risk analysis." *BSSA*, 58(5), 1583-1606.
-- McGuire, R.K. (2004). "Seismic Hazard and Risk Analysis." *EERI*.
+- McGuire, R.K. (2004). "Seismic Hazard and Risk Analysis." *EERI Monograph*.
+- Bazzurro, P. & Cornell, C.A. (1999). "Disaggregation of seismic hazard." *BSSA*, 89(2), 501-520.
 
 ---
 
@@ -602,4 +539,4 @@ seismex/analysis/
 ---
 
 **Versión:** 1.0.0  
-**Estado:** ESD ✅ | G-R ✅ | Isosistas ✅ | PSHA 📋
+**Estado:** ESD ✅ | G-R ✅ | Isosistas ✅ | Fuentes ✅ | PSHA ✅
