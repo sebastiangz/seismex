@@ -2,7 +2,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Status: Development](https://img.shields.io/badge/status-development-orange.svg)]()
+[![Status: Active](https://img.shields.io/badge/status-active-brightgreen.svg)]()
 
 **SEISMEX** es una plataforma integral para el análisis de riesgo sísmico en México, que integra metodologías avanzadas de sismología, optimización multiobjetivo y visualización geoespacial.
 
@@ -31,23 +31,24 @@
 |-------------|-------------|--------|
 | **ESD** | Energy Space Density - Densidad de energía sísmica 3D | ✅ Completo |
 | **Gutenberg-Richter** | Análisis de valor-b y magnitud de completitud | ✅ Completo |
-| **Isosistas** | Mapas de intensidad sísmica | 🔄 En desarrollo |
-| **PSHA** | Análisis Probabilístico de Peligro Sísmico | 📋 Planificado |
-| **Optimización GA** | Algoritmos genéticos multiobjetivo (NSGA-II) | 🔄 En desarrollo |
+| **Isosistas** | Mapas de intensidad sísmica (GMPEs/IPEs) | ✅ Completo |
+| **Modelos de Fuentes** | Fuentes de área, falla y puntuales | ✅ Completo |
+| **PSHA** | Análisis Probabilístico de Peligro Sísmico | ✅ Completo |
+| **Optimización NSGA-II** | Algoritmos genéticos multiobjetivo | ✅ Completo |
 
 ### Fuentes de Datos Soportadas
 
 - **SSN** - Servicio Sismológico Nacional de México
 - **ISC-GEM** - International Seismological Centre
 - **USGS** - United States Geological Survey
-- **GCMT** - Global Centroid Moment Tensor
+- **IRIS/FDSN** - Mecanismos focales
 
 ### Capacidades de Visualización
 
 - Secciones horizontales y verticales de ESD
 - Mapas interactivos con Folium
-- Exportación a GeoTIFF/GeoJSON
-- Integración con Google Earth Engine (planificado)
+- Exportación a GeoTIFF/GeoJSON/Shapefile
+- Integración con Google Earth Engine
 
 ---
 
@@ -75,15 +76,16 @@
 │  ┌─────────────────────────────────────────────────────────┐    │
 │  │                      NSGA-II                            │    │
 │  │  Funciones Objetivo: Costo | Impacto | Riesgo | Social  │    │
+│  │  Restricciones: Uso suelo | Pendiente | Fallas | ANPs   │    │
 │  └─────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
                               │
 ┌─────────────────────────────────────────────────────────────────┐
 │                      CAPA DE DATOS                              │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │     SSN     │  │   ISC-GEM   │  │         USGS            │  │
-│  │  (México)   │  │  (Global)   │  │       (Global)          │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
+│  ┌─────────────┐  ┌─────────────┐  ┌──────────┐  ┌───────────┐  │
+│  │     SSN     │  │   ISC-GEM   │  │   USGS   │  │   IRIS    │  │
+│  │  (México)   │  │  (Global)   │  │ (Global) │  │  (FDSN)   │  │
+│  └─────────────┘  └─────────────┘  └──────────┘  └───────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -128,29 +130,17 @@ conda activate seismex
 ```python
 from seismex.core import CatalogoSismico
 from seismex.analysis import CalculadoraESD, ConfiguracionESD
-from seismex.visualization import VisualizadorESD
 
-# 1. Cargar catálogo sísmico
+# Cargar catálogo
 catalogo = CatalogoSismico.desde_csv('catalogo_ssn.csv')
-catalogo.validar()
-print(catalogo.resumen())
 
-# 2. Configurar análisis ESD
-config = ConfiguracionESD(
-    tamano_celda_km=10.0,        # Celdas de 10×10×10 km
-    paso_deslizamiento_km=2.5,   # Paso de 2.5 km
-    magnitud_minima=2.4,         # Magnitud mínima
-    profundidad_maxima_km=150.0  # Profundidad máxima
-)
-
-# 3. Calcular ESD
+# Configurar y calcular ESD
+config = ConfiguracionESD(tamano_celda_km=10.0, magnitud_minima=2.4)
 calculadora = CalculadoraESD(config)
 resultado = calculadora.calcular_esd(catalogo)
 
-# 4. Visualizar
-viz = VisualizadorESD(resultado)
-viz.graficar_secciones_horizontales([10, 30, 50, 70])
-viz.exportar_geotiff('esd_colima.tif', profundidad_km=30)
+# Exportar
+resultado.exportar_geotiff('esd_colima.tif', profundidad_km=30)
 ```
 
 ### Análisis Gutenberg-Richter
@@ -158,16 +148,73 @@ viz.exportar_geotiff('esd_colima.tif', profundidad_km=30)
 ```python
 from seismex.analysis import AnalizadorGutenbergRichter
 
-# Calcular parámetros G-R
 gr = AnalizadorGutenbergRichter()
-resultado_gr = gr.analizar(catalogo)
+resultado = gr.analizar(catalogo)
+print(f"Mc = {resultado.mc:.2f}, b = {resultado.b_value:.3f}")
+```
 
-print(f"Mc = {resultado_gr.mc:.2f}")
-print(f"b = {resultado_gr.b_value:.3f} ± {resultado_gr.b_error:.3f}")
-print(f"a = {resultado_gr.a_value:.3f} ± {resultado_gr.a_error:.3f}")
+### Generación de Isosistas
 
-# Graficar
-gr.graficar_fmd(guardar='gutenberg_richter.png')
+```python
+from seismex.analysis.isoseismal import GeneradorIsosistas
+
+gen = GeneradorIsosistas(ipe='cenapred_2006', gmpe='garcia_2005')
+isosistas = gen.calcular(
+    latitud=19.32, longitud=-103.64,
+    profundidad_km=15, magnitud=6.5
+)
+isosistas.graficar()
+isosistas.exportar_geojson('isosistas_m65.geojson')
+```
+
+### Análisis PSHA
+
+```python
+from seismex.analysis.psha import crear_analizador_mexico
+
+# Analizador preconfigurado para México
+psha = crear_analizador_mexico(vs30=400)
+
+# Curva de peligro
+curva = psha.calcular_curva_peligro(sitio=(19.4, -99.1))
+pga_475 = curva.intensidad_para_periodo_retorno(475)
+print(f"PGA 475 años: {pga_475:.3f} g")
+
+# Mapa de peligro
+mapa = psha.calcular_mapa_peligro(
+    region={'lat': (14, 20), 'lon': (-105, -95)},
+    periodo_retorno=475,
+    resolucion=0.5
+)
+mapa.exportar_geotiff('peligro_mexico_475.tif')
+```
+
+### Optimización de Ubicación (NSGA-II)
+
+```python
+from seismex.optimization import (
+    OptimizadorNSGAII, ConfiguracionNSGAII,
+    objetivo_riesgo_esd, objetivo_costo_construccion,
+    restriccion_distancia_minima
+)
+
+# Configurar optimizador
+config = ConfiguracionNSGAII(
+    n_generaciones=100,
+    tamano_poblacion=200,
+    n_sitios=3
+)
+optimizador = OptimizadorNSGAII(config)
+
+# Agregar objetivos y restricciones
+optimizador.agregar_objetivo(objetivo_riesgo_esd(esd_grid, bounds))
+optimizador.agregar_objetivo(objetivo_costo_construccion())
+optimizador.agregar_restriccion(restriccion_distancia_minima(distancia_km=5))
+
+# Optimizar
+resultado = optimizador.optimizar(region=[(18, 21), (-105, -102)])
+resultado.graficar_pareto()
+resultado.exportar_geojson('ubicaciones_optimas.geojson')
 ```
 
 ---
@@ -178,21 +225,33 @@ gr.graficar_fmd(guardar='gutenberg_richter.png')
 Funcionalidades base: catálogos sísmicos, conversión de magnitudes, preprocesamiento.
 
 ### `seismex.analysis`
-Módulos de análisis: ESD, Gutenberg-Richter, isosistas, PSHA.
+Módulos de análisis sísmico:
+
+| Módulo | Descripción | Estado |
+|--------|-------------|--------|
+| `esd.py` | Energy Space Density | ✅ |
+| `gutenberg_richter.py` | Análisis valor-b y Mc | ✅ |
+| `isoseismal.py` | Isosistas con GMPEs/IPEs | ✅ |
+| `source_models.py` | Modelos de fuentes sísmicas | ✅ |
+| `psha.py` | PSHA Cornell-McGuire | ✅ |
+
+### `seismex.optimization`
+Optimización multiobjetivo NSGA-II:
+
+| Módulo | Descripción | Estado |
+|--------|-------------|--------|
+| `genetic.py` | Motor NSGA-II | ✅ |
+| `objectives.py` | 9 funciones objetivo | ✅ |
+| `constraints.py` | 11 restricciones | ✅ |
 
 ### `seismex.visualization`
 Visualización: gráficos Matplotlib, mapas Folium, exportación GeoTIFF.
 
-### `seismex.optimization`
-Optimización multiobjetivo: NSGA-II, funciones objetivo, restricciones.
-
 ### `seismex.data`
-Conectores de datos: SSN, ISC-GEM, USGS.
+Conectores de datos: SSN, ISC-GEM, USGS, IRIS/FDSN.
 
 ### `seismex.utils`
 Utilidades: cálculos geodésicos, I/O, validadores.
-
-Consulta los README individuales en cada subcarpeta para documentación detallada.
 
 ---
 
@@ -202,85 +261,113 @@ Consulta los README individuales en cada subcarpeta para documentación detallad
 seismex/
 ├── seismex/                    # Paquete principal
 │   ├── core/                   # Funcionalidades base
+│   │   ├── catalog.py          # Manejo de catálogos
+│   │   └── __init__.py
 │   ├── analysis/               # Módulos de análisis
+│   │   ├── esd.py              # Energy Space Density
+│   │   ├── gutenberg_richter.py
+│   │   ├── isoseismal.py       # Isosistas GMPEs/IPEs
+│   │   ├── source_models.py    # Modelos de fuentes
+│   │   ├── psha.py             # PSHA
+│   │   └── README.md
+│   ├── optimization/           # Optimización NSGA-II
+│   │   ├── genetic.py          # Motor NSGA-II
+│   │   ├── objectives.py       # Funciones objetivo
+│   │   ├── constraints.py      # Restricciones
+│   │   └── README.md
 │   ├── visualization/          # Visualización
-│   ├── optimization/           # Optimización GA
+│   │   ├── plotter.py
+│   │   ├── interactive.py
+│   │   └── gis_export.py
 │   ├── data/                   # Conectores de datos
+│   │   ├── ssn_connector.py
+│   │   ├── usgs_connector.py
+│   │   ├── isc_connector.py
+│   │   └── iris_connector.py
 │   └── utils/                  # Utilidades
-├── docs/                       # Documentación
-│   ├── api/                    # Documentación API
-│   ├── tutorials/              # Tutoriales
-│   └── examples/               # Ejemplos
+│       ├── geo.py
+│       ├── io.py
+│       └── validators.py
 ├── tests/                      # Pruebas
-│   ├── unit/                   # Pruebas unitarias
-│   └── integration/            # Pruebas de integración
-├── data/                       # Datos
-│   ├── raw/                    # Datos crudos
-│   ├── processed/              # Datos procesados
-│   └── catalogs/               # Catálogos sísmicos
-├── outputs/                    # Salidas
-│   ├── maps/                   # Mapas generados
-│   ├── reports/                # Reportes
-│   └── exports/                # Exportaciones GIS
 ├── notebooks/                  # Jupyter notebooks
-├── scripts/                    # Scripts de utilidad
-├── resources/                  # Recursos
-│   ├── shapefiles/             # Shapefiles de México
-│   ├── colormaps/              # Paletas de colores
-│   └── config/                 # Configuraciones
-├── README.md                   # Este archivo
-├── requirements.txt            # Dependencias pip
-├── environment.yml             # Entorno conda
-├── setup.py                    # Configuración de instalación
-├── pyproject.toml              # Configuración del proyecto
-├── CONTRIBUTING.md             # Guía de contribución
-├── LICENSE                     # Licencia MIT
-└── .gitignore                  # Archivos ignorados
+├── docs/                       # Documentación
+├── README.md
+├── requirements.txt
+├── environment.yml
+├── setup.py
+├── pyproject.toml
+├── CONTRIBUTING.md
+└── LICENSE
 ```
 
 ---
 
 ## 📚 Ejemplos
 
-### Notebook: Análisis ESD de la región de Colima
+### Pipeline Completo
+
+```python
+from seismex.core import CatalogoSismico
+from seismex.analysis import AnalizadorGutenbergRichter, CalculadoraESD, ConfiguracionESD
+from seismex.analysis.isoseismal import GeneradorIsosistas
+from seismex.analysis.source_models import ModeloFuentes
+from seismex.analysis.psha import AnalizadorPSHA
+
+# 1. Cargar catálogo
+catalogo = CatalogoSismico.desde_csv('ssn_colima.csv')
+
+# 2. Análisis Gutenberg-Richter
+gr = AnalizadorGutenbergRichter()
+resultado_gr = gr.analizar(catalogo)
+print(f"Mc = {resultado_gr.mc:.2f}, b = {resultado_gr.b_value:.3f}")
+
+# 3. Crear modelo de fuentes calibrado
+modelo = ModeloFuentes(nombre="Colima")
+modelo.agregar_zona_area(
+    nombre="Zona Colima",
+    poligono=[(18.5, -105.0), (20.0, -104.0), (20.0, -102.5), (18.5, -103.0)],
+    a_value=resultado_gr.a_value,
+    b_value=resultado_gr.b_value,
+    mmin=resultado_gr.mc,
+    mmax=8.0
+)
+
+# 4. Análisis PSHA
+from seismex.analysis.isoseismal import GMPEGarcia2005
+psha = AnalizadorPSHA(fuentes=modelo, vs30=400)
+psha.agregar_gmpe(GMPEGarcia2005(), peso=1.0)
+
+curva = psha.calcular_curva_peligro(sitio=(19.3, -103.7))
+print(f"PGA 475 años: {curva.intensidad_para_periodo_retorno(475):.3f} g")
+
+# 5. Desagregación
+desag = psha.desagregar(sitio=(19.3, -103.7), nivel_intensidad=0.2)
+print(f"Magnitud modal: {desag.magnitud_modal:.1f}")
+print(f"Distancia modal: {desag.distancia_modal:.0f} km")
+```
+
+### Notebooks disponibles
 
 ```bash
 jupyter notebook notebooks/01_analisis_esd_colima.ipynb
-```
-
-### Script: Descarga automática del catálogo SSN
-
-```bash
-python scripts/descargar_catalogo_ssn.py --region colima --desde 2000 --hasta 2024
-```
-
-### Pipeline completo
-
-```bash
-python scripts/pipeline_analisis.py --config resources/config/colima.yaml
+jupyter notebook notebooks/02_psha_mexico.ipynb
+jupyter notebook notebooks/03_optimizacion_ubicacion.ipynb
 ```
 
 ---
 
 ## 🤝 Contribuir
 
-¡Las contribuciones son bienvenidas! Por favor lee [CONTRIBUTING.md](CONTRIBUTING.md) para detalles sobre nuestro código de conducta y el proceso para enviar pull requests.
+¡Las contribuciones son bienvenidas! Por favor lee [CONTRIBUTING.md](CONTRIBUTING.md) para detalles.
 
 ### Desarrollo local
 
 ```bash
-# Clonar
 git clone https://github.com/sebastiangz/seismex.git
 cd seismex
-
-# Crear entorno
 conda env create -f environment.yml
 conda activate seismex
-
-# Instalar en modo desarrollo
 pip install -e ".[dev]"
-
-# Ejecutar pruebas
 pytest tests/
 ```
 
@@ -298,21 +385,31 @@ Este proyecto está bajo la Licencia MIT - ver [LICENSE](LICENSE) para detalles.
 - Del Pezzo, E., et al. (2024). "Energy Space Density: A new approach to seismic hazard assessment." *Geophysical Research Letters*.
 
 ### Gutenberg-Richter
-- Aki, K. (1965). "Maximum likelihood estimate of b in the formula log N = a - bM and its confidence limits." *Bulletin of the Earthquake Research Institute*, 43, 237-239.
-- Woessner, J., & Wiemer, S. (2005). "Assessing the quality of earthquake catalogues: Estimating the magnitude of completeness and its uncertainty." *BSSA*, 95(2), 684-698.
+- Aki, K. (1965). "Maximum likelihood estimate of b in the formula log N = a - bM." *BERI*, 43, 237-239.
+- Woessner, J., & Wiemer, S. (2005). "Assessing the quality of earthquake catalogues." *BSSA*, 95(2), 684-698.
+
+### GMPEs / IPEs
+- García, D., et al. (2005). "A predictive ground motion model for Mexico." *GJI*, 162(3), 908-924.
+- Zhao, J.X., et al. (2006). "Attenuation relations of strong ground motion in Japan." *BSSA*, 96(3), 898-913.
+- Allen, T.I., et al. (2012). "Intensity attenuation for active crustal regions." *J. Seismology*, 16, 409-433.
 
 ### PSHA
 - Cornell, C.A. (1968). "Engineering seismic risk analysis." *BSSA*, 58(5), 1583-1606.
+- McGuire, R.K. (2004). "Seismic Hazard and Risk Analysis." *EERI Monograph*.
+
+### Modelos de Fuentes
+- Youngs, R.R. & Coppersmith, K.J. (1985). "Implications of fault slip rates and earthquake recurrence models." *BSSA*, 75(4), 939-964.
+- Wells, D.L. & Coppersmith, K.J. (1994). "New empirical relationships among magnitude, rupture length, rupture width, rupture area, and surface displacement." *BSSA*, 84(4), 974-1002.
 
 ### Optimización Multiobjetivo
-- Deb, K., et al. (2002). "A fast and elitist multiobjective genetic algorithm: NSGA-II." *IEEE Transactions on Evolutionary Computation*, 6(2), 182-197.
+- Deb, K., et al. (2002). "A fast and elitist multiobjective genetic algorithm: NSGA-II." *IEEE Trans. Evolutionary Computation*, 6(2), 182-197.
 
 ---
 
 ## 👥 Autores
 
 - **sgz** - *Desarrollo inicial* - [GitHub](https://github.com/sebastiangz)
-- **mbg** - *Desarrollo funcional* 
+- **mbg** - *Desarrollo funcional*
 
 ## 🙏 Agradecimientos
 
