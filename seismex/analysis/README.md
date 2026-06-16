@@ -21,7 +21,7 @@ Módulo de análisis sísmico de SEISMEX. Contiene implementaciones de metodolog
 |--------|-------------|--------|
 | `esd` | Energy Space Density (Del Pezzo et al.) | ✅ Completo |
 | `gutenberg_richter` | Análisis de valor-b y Mc | ✅ Completo |
-| `isoseismal` | Mapas de isosistas | 🔄 En desarrollo |
+| `isoseismal` | Mapas de isosistas (GMPEs/IPEs) | ✅ Completo |
 | `psha` | Probabilistic Seismic Hazard Analysis | 📋 Planificado |
 | `source_models` | Modelos de fuentes sísmicas | 📋 Planificado |
 
@@ -232,56 +232,175 @@ gr.graficar_mapa_b(mapa_b, guardar='mapa_b_value.png')
 
 ## Isosistas
 
-Generación de mapas de intensidad sísmica (isosistas) basados en ecuaciones de predicción del movimiento del terreno (GMPE/IPE).
+Generación de mapas de intensidad sísmica (isosistas) basados en ecuaciones de predicción del movimiento del terreno (GMPE) y ecuaciones de predicción de intensidad (IPE).
 
-### Estado: 🔄 En Desarrollo
+### Estado: ✅ Completo
 
-### Estructura Planificada
+### Componentes Implementados
+
+#### GMPEs (Ground Motion Prediction Equations)
+
+| Modelo | Clase | Región | Referencia |
+|--------|-------|--------|------------|
+| Zhao (2006) | `GMPEZhao2006` | Subducción (Global) | Zhao et al., BSSA 2006 |
+| García (2005) | `GMPEGarcia2005` | México | García et al., GJI 2005 |
+| Atkinson-Boore (2003) | `GMPEAtkinsonBoore2003` | Intraplaca | Atkinson & Boore, BSSA 2003 |
+
+#### IPEs (Intensity Prediction Equations)
+
+| Modelo | Clase | Región | Referencia |
+|--------|-------|--------|------------|
+| Allen (2012) | `IPEAllen2012` | Global (corteza activa) | Allen et al., J. Seismology 2012 |
+| Atkinson-Wald (2007) | `IPEAtkinsonWald2007` | Global (desde PGM) | Atkinson & Wald, SRL 2007 |
+| CENAPRED (2006) | `IPECENAPRED2006` | México | CENAPRED 2006 |
+
+### Uso Básico
 
 ```python
 from seismex.analysis.isoseismal import (
     GeneradorIsosistas,
-    GMPE,
-    IPE
+    crear_generador_mexico,
+    crear_generador_subduccion
 )
 
-# Crear generador
+# Opción 1: Generador genérico
 gen = GeneradorIsosistas(
     ipe='allen_2012',           # Intensity Prediction Equation
-    gmpe='zhao_2006',           # Ground Motion Prediction Equation
-    modelo_sitio='vs30_wills'   # Modelo de efectos de sitio
+    gmpe='zhao_2006',           # Ground Motion Prediction Equation (opcional)
+    vs30_default=760            # Velocidad Vs30 por defecto (m/s)
 )
 
+# Opción 2: Generador preconfigurado para México
+gen = crear_generador_mexico()  # Usa CENAPRED + García
+
+# Opción 3: Generador para subducción
+gen = crear_generador_subduccion()  # Usa Allen + Zhao
+
 # Generar isosistas para un evento
-isosistas = gen.calcular(
+resultado = gen.calcular(
     latitud=19.32,
     longitud=-103.64,
     profundidad_km=15,
     magnitud=6.5,
-    resolucion_km=5.0
+    resolucion_km=5.0,          # Resolución espacial
+    radio_max_km=300            # Radio máximo de cálculo
 )
 
-# Exportar
-isosistas.exportar_geojson('isosistas_m65.geojson')
-isosistas.exportar_shapefile('isosistas_m65.shp')
+# Información del resultado
+print(f"Intensidad máxima: {resultado.intensidad_maxima:.1f} MMI")
+print(f"Intensidad en epicentro: {resultado.intensidad_epicentro:.1f} MMI")
 ```
 
-### GMPEs Planificadas
+### Visualización
 
-| Modelo | Región | Referencia |
-|--------|--------|------------|
-| Zhao (2006) | Subducción | Zhao et al., 2006 |
-| Atkinson-Boore | Intraplaca | Atkinson & Boore, 2003 |
-| García et al. | México | García et al., 2005 |
-| Arroyo et al. | México | Arroyo et al., 2010 |
+```python
+# Graficar mapa de isosistas
+resultado.graficar(
+    mostrar_epicentro=True,
+    mostrar_contornos=True,
+    colorbar=True
+)
 
-### IPEs Planificadas
+# Obtener contornos como lista de diccionarios
+contornos = resultado.obtener_contornos(niveles=[4, 5, 6, 7, 8])
+for c in contornos:
+    print(f"MMI {c['nivel']}: {c['descripcion']} - {c['color']}")
+```
 
-| Modelo | Región | Referencia |
-|--------|--------|------------|
-| Allen (2012) | Global | Allen et al., 2012 |
-| Wald (1999) | California | Wald et al., 1999 |
-| CENAPRED | México | CENAPRED, 2006 |
+### Exportación
+
+```python
+# Exportar a GeoJSON (contornos vectoriales)
+resultado.exportar_geojson('isosistas_m65.geojson')
+
+# Exportar a Shapefile
+resultado.exportar_shapefile('isosistas_m65.shp')
+
+# Exportar grilla a GeoTIFF
+resultado.exportar_geotiff('intensidad_m65.tif')
+
+# Convertir a GeoDataFrame para análisis SIG
+gdf = resultado.to_geodataframe()
+print(gdf.head())
+```
+
+### Modelo de Sitio (Efectos de Vs30)
+
+```python
+from seismex.analysis.isoseismal import ModeloSitio, GeneradorIsosistas
+import numpy as np
+
+# Crear modelo de sitio con raster de Vs30
+vs30_raster = np.load('vs30_mexico.npy')  # Tu grilla de Vs30
+bounds = (-118, 14, -86, 33)  # lon_min, lat_min, lon_max, lat_max
+
+modelo_sitio = ModeloSitio(
+    vs30_default=760.0,         # Valor por defecto donde no hay datos
+    vs30_raster=vs30_raster,    # Grilla de valores
+    bounds=bounds               # Límites del raster
+)
+
+# Crear generador con modelo de sitio
+gen = GeneradorIsosistas(
+    ipe='cenapred_2006',
+    modelo_sitio=modelo_sitio
+)
+```
+
+### Escenarios Múltiples
+
+```python
+# Calcular isosistas combinadas de múltiples eventos
+eventos = [
+    {'latitud': 19.32, 'longitud': -103.64, 'profundidad_km': 15, 'magnitud': 6.5},
+    {'latitud': 19.50, 'longitud': -103.80, 'profundidad_km': 20, 'magnitud': 5.8},
+]
+
+resultado_escenario = gen.calcular_escenario(
+    eventos=eventos,
+    resolucion_km=5.0,
+    metodo_combinacion='max'  # 'max', 'mean', o 'sum'
+)
+```
+
+### Escala de Intensidad MMI
+
+| MMI | Descripción | Color |
+|-----|-------------|-------|
+| I | No sentido | #FFFFFF |
+| II | Muy débil | #ACD8E9 |
+| III | Débil | #ACD8E9 |
+| IV | Ligero | #83D0DA |
+| V | Moderado | #7BC87F |
+| VI | Fuerte | #F9F518 |
+| VII | Muy fuerte | #FAC611 |
+| VIII | Severo | #FA8A11 |
+| IX | Violento | #F7100C |
+| X | Extremo | #C80F0A |
+| XI | Casi total destrucción | #800000 |
+| XII | Total destrucción | #400000 |
+
+### Conversión PGM a MMI
+
+```python
+from seismex.analysis.isoseismal import pga_a_mmi_wald, pgv_a_mmi_wald
+
+# Convertir PGA (g) a MMI
+mmi = pga_a_mmi_wald(0.15)  # 0.15g → ~VII MMI
+
+# Convertir PGV (cm/s) a MMI
+mmi = pgv_a_mmi_wald(20.0)  # 20 cm/s → ~VII MMI
+```
+
+### Listar Modelos Disponibles
+
+```python
+from seismex.analysis.isoseismal import GeneradorIsosistas
+
+modelos = GeneradorIsosistas.listar_modelos()
+print("IPEs:", modelos['ipes'])
+print("GMPEs:", modelos['gmpes'])
+```
 
 ---
 
@@ -354,6 +473,7 @@ from seismex.analysis import (
     CalculadoraESD,
     ConfiguracionESD
 )
+from seismex.analysis.isoseismal import GeneradorIsosistas
 from seismex.visualization import VisualizadorESD
 
 # 1. Cargar y preparar datos
@@ -379,10 +499,56 @@ config = ConfiguracionESD(
 esd = CalculadoraESD(config)
 resultado_esd = esd.calcular_esd(catalogo)
 
-# 4. Visualizar
+# 4. Generar isosistas para el evento más grande
+evento_max = catalogo.obtener_evento_maximo()
+gen = GeneradorIsosistas(ipe='cenapred_2006')
+isosistas = gen.calcular(
+    latitud=evento_max.latitud,
+    longitud=evento_max.longitud,
+    profundidad_km=evento_max.profundidad_km,
+    magnitud=evento_max.magnitud
+)
+
+# 5. Visualizar y exportar
 viz = VisualizadorESD(resultado_esd)
 viz.graficar_secciones_horizontales([10, 30, 50])
 viz.exportar_geotiff('esd_colima.tif', profundidad_km=30)
+
+isosistas.graficar()
+isosistas.exportar_geojson('isosistas_evento_max.geojson')
+```
+
+### Análisis de Evento Específico
+
+```python
+from seismex.analysis.isoseismal import (
+    GeneradorIsosistas,
+    TipoEvento
+)
+
+# Configurar para evento de subducción
+gen = GeneradorIsosistas(
+    ipe='allen_2012',
+    gmpe='zhao_2006'
+)
+
+# Sismo del 19 de septiembre de 2017
+resultado = gen.calcular(
+    latitud=18.40,
+    longitud=-98.72,
+    profundidad_km=51,
+    magnitud=7.1,
+    tipo_evento=TipoEvento.SUBDUCCION_INTRAPLACA,
+    resolucion_km=2.0,
+    radio_max_km=400
+)
+
+# Visualizar
+import matplotlib.pyplot as plt
+fig, ax = plt.subplots(figsize=(12, 10))
+resultado.graficar(ax=ax, titulo="Isosistas - Sismo 19S 2017 (M7.1)")
+plt.savefig('isosistas_19s_2017.png', dpi=300, bbox_inches='tight')
+plt.show()
 ```
 
 ---
@@ -392,20 +558,11 @@ viz.exportar_geotiff('esd_colima.tif', profundidad_km=30)
 ```
 seismex/analysis/
 ├── __init__.py               # Exportaciones
-├── esd.py                    # Energy Space Density
-├── gutenberg_richter.py      # Análisis G-R
-├── isoseismal.py             # Isosistas (en desarrollo)
+├── esd.py                    # Energy Space Density ✅
+├── gutenberg_richter.py      # Análisis G-R ✅
+├── isoseismal.py             # Isosistas (GMPEs/IPEs) ✅
 ├── psha.py                   # PSHA (planificado)
 ├── source_models.py          # Modelos de fuentes (planificado)
-├── gmpe/                     # Ecuaciones GMPE
-│   ├── __init__.py
-│   ├── zhao_2006.py
-│   ├── garcia_2005.py
-│   └── atkinson_boore.py
-├── ipe/                      # Ecuaciones IPE
-│   ├── __init__.py
-│   ├── allen_2012.py
-│   └── wald_1999.py
 └── README.md                 # Este archivo
 ```
 
@@ -414,12 +571,20 @@ seismex/analysis/
 ## Referencias
 
 ### ESD
-- Del Pezzo, E., et al. (2024). "Energy Space Density: A new approach to seismic hazard assessment." *GRL*.
+- Del Pezzo, E., et al. (2024). "Energy Space Density: A new approach to seismic hazard assessment." *Geophysical Research Letters*.
 
 ### Gutenberg-Richter
 - Aki, K. (1965). "Maximum likelihood estimate of b in the formula log N = a - bM." *BERI*, 43, 237-239.
 - Woessner, J., & Wiemer, S. (2005). "Assessing the quality of earthquake catalogues." *BSSA*, 95(2), 684-698.
 - Shi, Y., & Bolt, B. A. (1982). "The standard error of the magnitude-frequency b value." *BSSA*, 72(5), 1677-1687.
+
+### Isosistas / GMPEs / IPEs
+- Allen, T.I., et al. (2012). "Intensity attenuation for active crustal regions." *Journal of Seismology*, 16, 409-433.
+- Atkinson, G.M. & Wald, D.J. (2007). "Did You Feel It? intensity data: A surprisingly good measure of earthquake ground motion." *SRL*, 78(3), 362-368.
+- Zhao, J.X., et al. (2006). "Attenuation relations of strong ground motion in Japan." *BSSA*, 96(3), 898-913.
+- García, D., et al. (2005). "A predictive ground motion model for Mexico." *GJI*, 162(3), 908-924.
+- Atkinson, G.M. & Boore, D.M. (2003). "Empirical ground-motion relations for subduction-zone earthquakes." *BSSA*, 93(4), 1703-1729.
+- CENAPRED (2006). "Guía básica para la elaboración de atlas estatales y municipales de peligros y riesgos."
 
 ### PSHA
 - Cornell, C.A. (1968). "Engineering seismic risk analysis." *BSSA*, 58(5), 1583-1606.
@@ -431,3 +596,10 @@ seismex/analysis/
 
 - [`seismex.core`](../core/README.md) - Manejo de catálogos
 - [`seismex.visualization`](../visualization/README.md) - Visualización
+- [`seismex.optimization`](../optimization/README.md) - Optimización multiobjetivo
+- [`seismex.data`](../data/README.md) - Conectores de datos
+
+---
+
+**Versión:** 1.0.0  
+**Estado:** ESD ✅ | G-R ✅ | Isosistas ✅ | PSHA 📋
