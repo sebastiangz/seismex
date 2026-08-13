@@ -409,7 +409,7 @@ Este proyecto está bajo la Licencia MIT - ver [LICENSE](LICENSE) para detalles.
 ## 👥 Autores
 
 - **sgz** - *Desarrollo inicial* - [GitHub](https://github.com/sebastiangz)
-- **mbg** - *Desarrollo funcional* - [GitHun](https://github.com/mauri-777)
+- **mbg** - *Desarrollo funcional* - [GitHub](https://github.com/mauri-777)
 
 ## 🙏 Agradecimientos
 
